@@ -106,3 +106,120 @@ def test_setup_failure_disables_only_that_plugin(tmp_path):
     assert result.loaded == ["good"]
     assert "bad" in result.failed
     assert manager.tools.has_tool("good_tool") is True
+
+
+def test_group_message_plugin_archives_and_reads_current_group(tmp_path):
+    from mini_agent.plugins.group_messages import setup
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={"group_messages": setup},
+        )
+        result = manager.load_all()
+
+        await manager.emit(
+            "group_message",
+            {
+                "group_id": "67890",
+                "sender_id": "12345",
+                "sender_name": "Alice",
+                "text": "hello group",
+                "message_id": "101",
+                "timestamp": 1710000000,
+                "mentioned_bot": False,
+            },
+        )
+        read = await manager.tools.execute(
+            "read_group_messages",
+            {"limit": 10},
+            context={"channel": "qq", "chat_id": "gqq:67890"},
+        )
+
+        assert result.loaded == ["group_messages"]
+        assert read.success is True
+        assert read.content == {
+            "group_id": "67890",
+            "messages": [
+                {
+                    "sender_id": "12345",
+                    "sender_name": "Alice",
+                    "text": "hello group",
+                    "message_id": "101",
+                    "timestamp": 1710000000,
+                    "mentioned_bot": False,
+                }
+            ],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_group_message_plugin_requires_group_outside_group_context(tmp_path):
+    from mini_agent.plugins.group_messages import setup
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={"group_messages": setup},
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "read_group_messages",
+            {},
+            context={"channel": "qq", "chat_id": "12345"},
+        )
+
+        assert result.success is False
+        assert "group_id" in result.error
+
+    asyncio.run(scenario())
+
+
+def test_group_message_plugin_keeps_latest_200_and_caps_query_at_100(tmp_path):
+    from mini_agent.plugins.group_messages import setup
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={"group_messages": setup},
+        )
+        manager.load_all()
+
+        for index in range(205):
+            await manager.emit(
+                "group_message",
+                {
+                    "group_id": "67890",
+                    "sender_id": "12345",
+                    "sender_name": "",
+                    "text": f"message {index}",
+                    "message_id": str(index),
+                    "timestamp": index,
+                    "mentioned_bot": False,
+                },
+            )
+
+        result = await manager.tools.execute(
+            "read_group_messages",
+            {"group_id": "67890", "limit": 500},
+        )
+        stored = manager.kv_get("group_messages", "group:67890")
+
+        assert len(stored) == 200
+        assert stored[0]["text"] == "message 5"
+        assert len(result.content["messages"]) == 100
+        assert result.content["messages"][0]["text"] == "message 105"
+        assert result.content["messages"][-1]["text"] == "message 204"
+
+    asyncio.run(scenario())

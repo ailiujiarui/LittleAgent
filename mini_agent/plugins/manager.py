@@ -2,7 +2,7 @@ import importlib.util
 import inspect
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, Field
 
@@ -16,12 +16,18 @@ class PluginLoadResult(BaseModel):
 
 
 class PluginManager:
-    def __init__(self, workspace: Path, tools: ToolRegistry) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        tools: ToolRegistry,
+        builtin_plugins: Optional[Mapping[str, Callable[[PluginContext], None]]] = None,
+    ) -> None:
         self.workspace = Path(workspace)
         self.plugins_dir = self.workspace / "plugins"
         self.tools = tools
         self.kv_store = PluginKVStore(self.workspace / "agent.db")
         self._event_handlers: Dict[str, List[EventHandler]] = {}
+        self.builtin_plugins = dict(builtin_plugins or {})
 
     def discover(self) -> List[Path]:
         if not self.plugins_dir.exists():
@@ -34,25 +40,41 @@ class PluginManager:
 
     def load_all(self) -> PluginLoadResult:
         result = PluginLoadResult()
+        for name, setup in sorted(self.builtin_plugins.items()):
+            self._load_plugin(name, setup, result)
+
         for plugin_file in self.discover():
             name = plugin_file.parent.name
             try:
                 module = _load_module(name, plugin_file)
                 setup = getattr(module, "setup")
-                ctx = PluginContext(
-                    name=name,
-                    workspace=self.workspace,
-                    plugin_dir=plugin_file.parent,
-                    tools=self.tools,
-                    kv_store=self.kv_store,
-                    event_handlers=self._event_handlers,
-                )
-                setup(ctx)
             except Exception as exc:  # noqa: BLE001 - one bad plugin must not stop startup.
                 result.failed[name] = str(exc)
                 continue
-            result.loaded.append(name)
+            self._load_plugin(name, setup, result, plugin_dir=plugin_file.parent)
         return result
+
+    def _load_plugin(
+        self,
+        name: str,
+        setup: Callable[[PluginContext], None],
+        result: PluginLoadResult,
+        plugin_dir: Optional[Path] = None,
+    ) -> None:
+        try:
+            ctx = PluginContext(
+                name=name,
+                workspace=self.workspace,
+                plugin_dir=plugin_dir or self.plugins_dir / name,
+                tools=self.tools,
+                kv_store=self.kv_store,
+                event_handlers=self._event_handlers,
+            )
+            setup(ctx)
+        except Exception as exc:  # noqa: BLE001 - one bad plugin must not stop startup.
+            result.failed[name] = str(exc)
+            return
+        result.loaded.append(name)
 
     async def emit(self, event_name: str, event: Dict[str, Any]) -> None:
         for handler in list(self._event_handlers.get(event_name, [])):

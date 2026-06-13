@@ -1,12 +1,13 @@
 import json
 import re
-from typing import Any, Dict, Iterable, Mapping, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Set
 
 from mini_agent.bus import MessageBus
 from mini_agent.models import InboundMessage, OutboundMessage
 
 
 _CQ_AT_PATTERN = re.compile(r"\[CQ:at,qq=([^\]]+)\]")
+EventEmitter = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 
 class OneBotQQChannel:
@@ -16,9 +17,13 @@ class OneBotQQChannel:
         bus: Optional[MessageBus] = None,
         allowed_private_users: Optional[Iterable[str]] = None,
         groups: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        logger: Optional[Callable[[str], None]] = None,
+        event_emitter: Optional[EventEmitter] = None,
     ) -> None:
         self.bot_id = str(bot_id)
         self.bus = bus
+        self.logger = logger or (lambda message: None)
+        self.event_emitter = event_emitter
         self._sockets = set()
         self._server = None
         self.allowed_private_users = _string_set(allowed_private_users)
@@ -59,9 +64,25 @@ class OneBotQQChannel:
         }
 
     async def handle_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
+        if self.event_emitter is not None:
+            group_event = self._group_plugin_event(event)
+            if group_event is not None:
+                await self.event_emitter("group_message", group_event)
+
         message = self.parse_event(event)
         if message is not None and self.bus is not None:
+            self.logger(
+                f"OneBot inbound {message.metadata.get('chat_type', message.channel)} "
+                f"{message.chat_id}: {message.text}"
+            )
             await self.bus.publish_inbound(message)
+        elif event.get("post_type") == "message":
+            self.logger(
+                "OneBot message ignored: "
+                f"type={event.get('message_type')} "
+                f"user_id={event.get('user_id')} "
+                f"group_id={event.get('group_id')}"
+            )
         return message
 
     async def send_via_socket(self, socket: Any, message: OutboundMessage) -> None:
@@ -89,11 +110,14 @@ class OneBotQQChannel:
 
     async def _handle_socket(self, socket: Any) -> None:
         self._sockets.add(socket)
+        address = getattr(socket, "remote_address", "unknown")
+        self.logger(f"OneBot socket connected: {address}")
         try:
             async for raw in socket:
                 await self.handle_event(json.loads(raw))
         finally:
             self._sockets.discard(socket)
+            self.logger(f"OneBot socket disconnected: {address}")
 
     def _parse_private_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
         sender_id = str(event.get("user_id", ""))
@@ -111,6 +135,32 @@ class OneBotQQChannel:
         )
 
     def _parse_group_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
+        group_event = self._group_plugin_event(event)
+        if group_event is None:
+            return None
+
+        group_id = group_event["group_id"]
+        if self.groups[group_id]["require_at"] and not group_event["mentioned_bot"]:
+            return None
+
+        return InboundMessage(
+            channel="qq",
+            chat_id=f"gqq:{group_id}",
+            sender_id=group_event["sender_id"],
+            text=group_event["text"],
+            message_id=group_event["message_id"],
+            raw=dict(event),
+            metadata={
+                "chat_type": "group",
+                "group_id": group_id,
+                "sender_id": group_event["sender_id"],
+            },
+        )
+
+    def _group_plugin_event(self, event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+        if event.get("post_type") != "message" or event.get("message_type") != "group":
+            return None
+
         group_id = str(event.get("group_id", ""))
         rule = self.groups.get(group_id)
         if rule is None:
@@ -122,23 +172,16 @@ class OneBotQQChannel:
             return None
 
         message = event.get("message")
-        has_bot_at = _has_bot_at(message, self.bot_id)
-        if rule["require_at"] and not has_bot_at:
-            return None
-
-        return InboundMessage(
-            channel="qq",
-            chat_id=f"gqq:{group_id}",
-            sender_id=sender_id,
-            text=_message_to_text(message, strip_at=True).strip(),
-            message_id=_optional_str(event.get("message_id")),
-            raw=dict(event),
-            metadata={
-                "chat_type": "group",
-                "group_id": group_id,
-                "sender_id": sender_id,
-            },
-        )
+        sender = event.get("sender") or {}
+        return {
+            "group_id": group_id,
+            "sender_id": sender_id,
+            "sender_name": str(sender.get("card") or sender.get("nickname") or ""),
+            "text": _message_to_text(message, strip_at=True).strip(),
+            "message_id": _optional_str(event.get("message_id")),
+            "timestamp": event.get("time"),
+            "mentioned_bot": _has_bot_at(message, self.bot_id),
+        }
 
 
 def _string_set(values: Optional[Iterable[Any]]) -> Set[str]:

@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+import errno
 
 import typer
 
@@ -33,7 +34,17 @@ def run(
         typer.echo(f"dry-run ok: {summary['workspace']}")
         typer.echo("tools: " + ", ".join(summary["tools"]))
         return
-    asyncio.run(runtime.run_forever())
+    try:
+        asyncio.run(runtime.run_forever())
+    except OSError as exc:
+        if exc.errno not in {errno.EADDRINUSE, 10048}:
+            raise
+        typer.echo(
+            "OneBot port is already in use: "
+            f"{app_config.onebot.host}:{app_config.onebot.port}"
+        )
+        typer.echo("Stop the existing agent process or choose a different onebot.port.")
+        raise typer.Exit(1) from exc
 
 
 @app.command()

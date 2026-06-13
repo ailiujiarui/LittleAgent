@@ -33,7 +33,84 @@ def test_app_runtime_dry_run_builds_services(tmp_path):
     assert summary["workspace"] == str(tmp_path)
     assert "get_time" in summary["tools"]
     assert "message_push" in summary["tools"]
+    assert "read_group_messages" in summary["tools"]
+    assert summary["plugins"]["loaded"] == ["group_messages"]
     assert (tmp_path / "agent.db").exists()
+
+
+def test_app_runtime_startup_lines_show_listening_details(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, OneBotConfig
+
+    runtime = AppRuntime(
+        AppConfig(
+            workspace=tmp_path,
+            onebot=OneBotConfig(bot_uin="1158271244", port=8765),
+        )
+    )
+
+    lines = runtime.startup_lines()
+
+    assert "workspace: " + str(tmp_path) in lines
+    assert "OneBot listening: ws://127.0.0.1:8765/onebot/v11/ws" in lines
+    assert "bot_uin: 1158271244" in lines
+
+
+def test_app_runtime_default_logger_flushes(monkeypatch, tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig
+
+    calls = []
+
+    def fake_print(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr("builtins.print", fake_print)
+    runtime = AppRuntime(AppConfig(workspace=tmp_path))
+
+    runtime.logger("ready")
+
+    assert calls == [(("ready",), {"flush": True})]
+
+
+def test_app_runtime_archives_group_message_without_reply_trigger(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, OneBotConfig
+
+    async def scenario():
+        runtime = AppRuntime(
+            AppConfig(
+                workspace=tmp_path,
+                onebot=OneBotConfig(
+                    bot_uin="10000",
+                    groups={"67890": {"allow_from": [], "require_at": True}},
+                ),
+            )
+        )
+        runtime.build_services()
+
+        result = await runtime.onebot.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 67890,
+                "user_id": 12345,
+                "message": "quiet group context",
+            }
+        )
+        read = await runtime.tools.execute(
+            "read_group_messages",
+            {"group_id": "67890"},
+        )
+
+        assert result is None
+        assert runtime.bus._queue().empty()
+        assert read.success is True
+        assert read.content["messages"][0]["text"] == "quiet group context"
+
+    import asyncio
+
+    asyncio.run(scenario())
 
 
 def test_cli_run_dry_run(tmp_path):
@@ -46,3 +123,26 @@ def test_cli_run_dry_run(tmp_path):
 
     assert result.exit_code == 0
     assert "dry-run ok" in result.output.lower()
+
+
+def test_cli_run_reports_onebot_port_in_use(monkeypatch, tmp_path):
+    from mini_agent.__main__ import app
+    from mini_agent.app import AppRuntime
+
+    async def raise_port_in_use(self):
+        raise OSError(
+            10048,
+            "error while attempting to bind on address "
+            "('127.0.0.1', 8765): only one usage allowed",
+        )
+
+    monkeypatch.setattr(AppRuntime, "run_forever", raise_port_in_use)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "--workspace", str(tmp_path / "workspace")],
+    )
+
+    assert result.exit_code == 1
+    assert "OneBot port is already in use:" in result.output
+    assert ":8765" in result.output

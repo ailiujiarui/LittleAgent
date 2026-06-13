@@ -75,6 +75,97 @@ def test_group_message_without_bot_at_is_ignored_when_require_at():
     )
 
 
+def test_group_message_without_bot_at_emits_plugin_event_but_not_inbound():
+    from mini_agent.bus import MessageBus
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        bus = MessageBus()
+        events = []
+
+        async def emit(event_name, event):
+            events.append((event_name, event))
+
+        channel = OneBotQQChannel(
+            bot_id="10000",
+            bus=bus,
+            groups={"67890": {"allow_from": set(), "require_at": True}},
+            event_emitter=emit,
+        )
+
+        result = await channel.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 67890,
+                "user_id": 12345,
+                "message_id": 101,
+                "time": 1710000000,
+                "sender": {"nickname": "Alice"},
+                "message": "ordinary chatter",
+            }
+        )
+
+        assert result is None
+        assert bus._queue().empty()
+        assert events == [
+            (
+                "group_message",
+                {
+                    "group_id": "67890",
+                    "sender_id": "12345",
+                    "sender_name": "Alice",
+                    "text": "ordinary chatter",
+                    "message_id": "101",
+                    "timestamp": 1710000000,
+                    "mentioned_bot": False,
+                },
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_group_message_with_bot_at_emits_plugin_event_and_inbound():
+    from mini_agent.bus import MessageBus
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        bus = MessageBus()
+        events = []
+
+        async def emit(event_name, event):
+            events.append((event_name, event))
+
+        channel = OneBotQQChannel(
+            bot_id="10000",
+            bus=bus,
+            groups={"67890": {"allow_from": set(), "require_at": True}},
+            event_emitter=emit,
+        )
+
+        result = await channel.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "group_id": 67890,
+                "user_id": 12345,
+                "message": [
+                    {"type": "at", "data": {"qq": "10000"}},
+                    {"type": "text", "data": {"text": " summarize"}},
+                ],
+            }
+        )
+
+        assert result is not None
+        assert (await bus.consume_inbound()).text == "summarize"
+        assert events[0][0] == "group_message"
+        assert events[0][1]["mentioned_bot"] is True
+        assert events[0][1]["text"] == "summarize"
+
+    asyncio.run(scenario())
+
+
 def test_group_message_from_unconfigured_group_is_ignored():
     from mini_agent.channels.onebot_qq import OneBotQQChannel
 
@@ -185,6 +276,29 @@ def test_onebot_channel_handle_event_publishes_to_bus():
     asyncio.run(scenario())
 
 
+def test_onebot_channel_logs_published_private_event():
+    from mini_agent.bus import MessageBus
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        logs = []
+        bus = MessageBus()
+        channel = OneBotQQChannel(bot_id="10000", bus=bus, logger=logs.append)
+
+        await channel.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message": "hello",
+            }
+        )
+
+        assert "OneBot inbound private 12345: hello" in logs
+
+    asyncio.run(scenario())
+
+
 def test_onebot_channel_send_writes_payload_to_socket():
     from mini_agent.channels.onebot_qq import OneBotQQChannel
 
@@ -206,6 +320,33 @@ def test_onebot_channel_send_writes_payload_to_socket():
                 "action": "send_private_msg",
                 "params": {"user_id": 12345, "message": "pong"},
             }
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_logs_socket_connect_and_disconnect():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        logs = []
+
+        class Socket:
+            remote_address = ("127.0.0.1", 10000)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        channel = OneBotQQChannel(bot_id="10000", logger=logs.append)
+
+        await channel._handle_socket(Socket())
+
+        assert logs == [
+            "OneBot socket connected: ('127.0.0.1', 10000)",
+            "OneBot socket disconnected: ('127.0.0.1', 10000)",
         ]
 
     asyncio.run(scenario())

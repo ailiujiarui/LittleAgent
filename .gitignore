@@ -4,6 +4,13 @@ __pycache__/
 .venv/
 .tmp_workspace/
 workspace/
+config.toml
+logs/
+mini_agent.egg-info/
 *.db
 *.db-shm
 *.db-wal
+docker/napcat/qrcode.png
+docker/napcat/logs/
+docker/napcat/qq-config/
+docker/napcat/config/
