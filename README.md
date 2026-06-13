@@ -41,3 +41,11 @@ Then run:
 ```bash
 py -m mini_agent run --workspace workspace --config config.toml
 ```
+
+## License
+
+LittleAgent is licensed under the
+[GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
+If you modify the software and make it available to users over a network, you
+must offer those users the corresponding source code as required by the
+license.

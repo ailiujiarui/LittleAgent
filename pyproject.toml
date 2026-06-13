@@ -3,6 +3,7 @@ name = "mini-agent"
 version = "0.1.0"
 description = "Minimal Akashic-inspired QQ agent MVP"
 requires-python = ">=3.9"
+license = "AGPL-3.0-only"
 dependencies = [
   "pydantic>=2",
   "tomli>=2; python_version < '3.11'",
