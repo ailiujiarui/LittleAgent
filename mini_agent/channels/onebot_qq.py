@@ -1,6 +1,8 @@
+import json
 import re
 from typing import Any, Dict, Iterable, Mapping, Optional, Set
 
+from mini_agent.bus import MessageBus
 from mini_agent.models import InboundMessage, OutboundMessage
 
 
@@ -11,10 +13,14 @@ class OneBotQQChannel:
     def __init__(
         self,
         bot_id: str,
+        bus: Optional[MessageBus] = None,
         allowed_private_users: Optional[Iterable[str]] = None,
         groups: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> None:
         self.bot_id = str(bot_id)
+        self.bus = bus
+        self._sockets = set()
+        self._server = None
         self.allowed_private_users = _string_set(allowed_private_users)
         self.groups = {
             str(group_id): {
@@ -51,6 +57,43 @@ class OneBotQQChannel:
             "action": "send_private_msg",
             "params": {"user_id": int(message.chat_id), "message": message.text},
         }
+
+    async def handle_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
+        message = self.parse_event(event)
+        if message is not None and self.bus is not None:
+            await self.bus.publish_inbound(message)
+        return message
+
+    async def send_via_socket(self, socket: Any, message: OutboundMessage) -> None:
+        await socket.send(json.dumps(self.build_send_payload(message), ensure_ascii=False))
+
+    async def send(self, message: OutboundMessage) -> None:
+        if not self._sockets:
+            raise RuntimeError("OneBot socket is not connected")
+        for socket in list(self._sockets):
+            await self.send_via_socket(socket, message)
+
+    async def start(self, host: str = "127.0.0.1", port: int = 8765) -> None:
+        try:
+            import websockets
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("websockets is required for OneBot QQ channel") from exc
+
+        self._server = await websockets.serve(self._handle_socket, host, port)
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+    async def _handle_socket(self, socket: Any) -> None:
+        self._sockets.add(socket)
+        try:
+            async for raw in socket:
+                await self.handle_event(json.loads(raw))
+        finally:
+            self._sockets.discard(socket)
 
     def _parse_private_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
         sender_id = str(event.get("user_id", ""))

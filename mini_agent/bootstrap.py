@@ -19,6 +19,8 @@ def init_workspace(workspace: Path) -> None:
         _write_once(memory_dir / filename, content)
 
     _write_once(workspace / "mcp_servers.json", "{}\n")
+    _write_once(workspace / "PROACTIVE_CONTEXT.md", "# Proactive Context\n\n")
+    (workspace / "drift" / "skills").mkdir(parents=True, exist_ok=True)
 
 
 def _write_once(path: Path, content: str) -> None:

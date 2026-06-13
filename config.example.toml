@@ -8,6 +8,20 @@ model = "gpt-4.1-mini"
 [onebot]
 host = "127.0.0.1"
 port = 8765
+path = "/onebot/v11/ws"
+bot_uin = "123456789"
+allow_private = []
+
+[onebot.groups."222222222"]
+allow_from = []
+require_at = true
 
 [proactive]
 enabled = false
+
+[dashboard]
+host = "127.0.0.1"
+port = 8787
+
+[mcp]
+enabled = true

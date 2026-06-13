@@ -1,3 +1,6 @@
+import asyncio
+import json
+
 from mini_agent.models import OutboundMessage
 
 
@@ -158,3 +161,51 @@ def test_outbound_group_message_builds_onebot_send_group_payload():
         "action": "send_group_msg",
         "params": {"group_id": 67890, "message": "pong"},
     }
+
+
+def test_onebot_channel_handle_event_publishes_to_bus():
+    from mini_agent.bus import MessageBus
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        bus = MessageBus()
+        channel = OneBotQQChannel(bot_id="10000", bus=bus)
+
+        await channel.handle_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message": "hello",
+            }
+        )
+
+        assert (await bus.consume_inbound()).text == "hello"
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_send_writes_payload_to_socket():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        sent = []
+
+        class Socket:
+            async def send(self, data):
+                sent.append(json.loads(data))
+
+        channel = OneBotQQChannel(bot_id="10000")
+        await channel.send_via_socket(
+            Socket(),
+            OutboundMessage(channel="qq", chat_id="12345", text="pong"),
+        )
+
+        assert sent == [
+            {
+                "action": "send_private_msg",
+                "params": {"user_id": 12345, "message": "pong"},
+            }
+        ]
+
+    asyncio.run(scenario())

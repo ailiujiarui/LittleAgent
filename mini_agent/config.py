@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,10 @@ class LLMConfig(BaseModel):
 class OneBotConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8765
+    path: str = "/onebot/v11/ws"
+    bot_uin: str = "0"
+    allow_private: List[str] = Field(default_factory=list)
+    groups: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     access_token: Optional[str] = None
 
 
@@ -30,11 +34,22 @@ class ProactiveConfig(BaseModel):
     enabled: bool = False
 
 
+class DashboardConfig(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 8787
+
+
+class MCPConfig(BaseModel):
+    enabled: bool = True
+
+
 class AppConfig(BaseModel):
     workspace: Path = Path("workspace")
     llm: LLMConfig = Field(default_factory=LLMConfig)
     onebot: OneBotConfig = Field(default_factory=OneBotConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 def load_config(path: Optional[Path] = None) -> AppConfig:
