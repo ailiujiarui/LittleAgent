@@ -1,13 +1,15 @@
 import inspect
-from typing import Any, Callable, Dict, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 
 class ToolResult(BaseModel):
     success: bool
-    content: Dict[str, Any] = {}
+    content: Dict[str, Any] = Field(default_factory=dict)
     error: str = ""
+    text: str = ""
+    content_blocks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class Tool:
@@ -57,6 +59,8 @@ class Tool:
 
         if isinstance(value, ToolResult):
             return value
+        if isinstance(value, str):
+            return ToolResult(success=True, content={"result": value}, text=value)
         if isinstance(value, dict):
             return ToolResult(success=True, content=value)
         return ToolResult(success=True, content={"result": value})

@@ -26,3 +26,32 @@ class SessionStore:
             )
             conn.commit()
         return session_id
+
+
+class MessageStore:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path)
+        apply_migrations(self.db_path)
+
+    def add_message(self, session_id: str, role: str, content: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                insert into messages (session_id, role, content)
+                values (?, ?, ?)
+                """,
+                (session_id, role, content),
+            )
+            conn.commit()
+
+    def list_messages(self, session_id: str):
+        with sqlite3.connect(self.db_path) as conn:
+            return conn.execute(
+                """
+                select role, content
+                from messages
+                where session_id = ?
+                order by id
+                """,
+                (session_id,),
+            ).fetchall()

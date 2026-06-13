@@ -109,3 +109,113 @@ def test_session_store_creates_and_updates_sessions(tmp_path):
 
     assert session_id == "qq:gqq:678"
     assert rows == [("qq:gqq:678", "qq", "gqq:678")]
+
+
+def test_passive_turn_text_response_returns_assistant_output():
+    from mini_agent.llm import LLMResponse
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        class FakeLLM:
+            async def chat(self, messages, tools):
+                return LLMResponse(content="assistant reply")
+
+        pipeline = PassiveTurnPipeline(llm=FakeLLM(), tools=ToolRegistry())
+
+        assert await pipeline.run(_message("123", "hello")) == "assistant reply"
+
+    asyncio.run(scenario())
+
+
+def test_passive_turn_tool_call_executes_and_feeds_result_back():
+    from pydantic import BaseModel
+
+    from mini_agent.llm import LLMResponse, ToolCall
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.base import Tool
+    from mini_agent.tools.registry import ToolRegistry
+
+    class EchoArgs(BaseModel):
+        text: str
+
+    async def scenario():
+        registry = ToolRegistry()
+        registry.register(Tool("echo", "Echo text", EchoArgs, lambda args: {"echo": args.text}))
+
+        class FakeLLM:
+            def __init__(self):
+                self.calls = []
+
+            async def chat(self, messages, tools):
+                self.calls.append(messages)
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        tool_calls=[
+                            ToolCall(id="call-1", name="echo", arguments={"text": "abc"})
+                        ]
+                    )
+                return LLMResponse(content="done")
+
+        llm = FakeLLM()
+        pipeline = PassiveTurnPipeline(llm=llm, tools=registry)
+
+        assert await pipeline.run(_message("123", "use echo")) == "done"
+        assert llm.calls[1][-1]["role"] == "tool"
+        assert llm.calls[1][-1]["tool_call_id"] == "call-1"
+        assert '"echo":"abc"' in llm.calls[1][-1]["content"].replace(" ", "")
+
+    asyncio.run(scenario())
+
+
+def test_passive_turn_max_tool_iterations_returns_failure_message():
+    from mini_agent.llm import LLMResponse, ToolCall
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        class FakeLLM:
+            async def chat(self, messages, tools):
+                return LLMResponse(
+                    tool_calls=[ToolCall(id="call-1", name="missing", arguments={})]
+                )
+
+        pipeline = PassiveTurnPipeline(
+            llm=FakeLLM(),
+            tools=ToolRegistry(),
+            max_tool_iterations=2,
+        )
+
+        result = await pipeline.run(_message("123", "loop forever"))
+
+        assert "tool iteration limit" in result.lower()
+
+    asyncio.run(scenario())
+
+
+def test_passive_turn_persists_user_and_assistant_messages(tmp_path):
+    from mini_agent.db.stores import MessageStore
+    from mini_agent.llm import LLMResponse
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        class FakeLLM:
+            async def chat(self, messages, tools):
+                return LLMResponse(content="stored reply")
+
+        store = MessageStore(tmp_path / "agent.db")
+        pipeline = PassiveTurnPipeline(
+            llm=FakeLLM(),
+            tools=ToolRegistry(),
+            message_store=store,
+        )
+
+        await pipeline.run(_message("123", "stored user"))
+
+        assert store.list_messages("qq:123") == [
+            ("user", "stored user"),
+            ("assistant", "stored reply"),
+        ]
+
+    asyncio.run(scenario())
