@@ -15,9 +15,9 @@ _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class LLMConfig(BaseModel):
-    base_url: str = "http://127.0.0.1:11434/v1"
+    base_url: str = "https://api.deepseek.com"
     api_key: str = ""
-    model: str = "qwen2.5:7b"
+    model: str = "deepseek-v4-flash"
 
 
 class OneBotConfig(BaseModel):

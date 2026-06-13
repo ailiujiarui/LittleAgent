@@ -1,6 +1,17 @@
 import sqlite3
 
 
+def test_load_config_defaults_to_deepseek_openai_compatible(tmp_path, monkeypatch):
+    from mini_agent.config import load_config
+
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config()
+
+    assert config.llm.base_url == "https://api.deepseek.com"
+    assert config.llm.model == "deepseek-v4-flash"
+
+
 def test_load_config_expands_env_and_defaults(tmp_path, monkeypatch):
     from mini_agent.config import load_config
 

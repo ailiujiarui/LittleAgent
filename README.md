@@ -11,6 +11,23 @@ py -m mini_agent init --workspace workspace
 py -m mini_agent run --dry-run --workspace workspace
 ```
 
+## DeepSeek
+
+The default LLM provider is DeepSeek's OpenAI-compatible chat API.
+
+```toml
+[llm]
+base_url = "https://api.deepseek.com"
+api_key = "${DEEPSEEK_API_KEY}"
+model = "deepseek-v4-flash"
+```
+
+Set the API key before running:
+
+```powershell
+$env:DEEPSEEK_API_KEY="your-api-key"
+```
+
 For QQ, configure NapCat reverse WebSocket to:
 
 ```text

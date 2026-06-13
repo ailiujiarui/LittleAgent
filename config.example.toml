@@ -1,9 +1,9 @@
 workspace = "workspace"
 
 [llm]
-base_url = "https://api.openai.com/v1"
-api_key = "${OPENAI_API_KEY}"
-model = "gpt-4.1-mini"
+base_url = "https://api.deepseek.com"
+api_key = "${DEEPSEEK_API_KEY}"
+model = "deepseek-v4-flash"
 
 [onebot]
 host = "127.0.0.1"
