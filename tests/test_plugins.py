@@ -223,3 +223,99 @@ def test_group_message_plugin_keeps_latest_200_and_caps_query_at_100(tmp_path):
         assert result.content["messages"][-1]["text"] == "message 204"
 
     asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_filters_sorts_and_formats_links(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def fake_fetch(args, settings):
+        assert settings["endpoint"] == "https://search.example.test/xhs"
+        assert settings["api_key"] == "secret"
+        assert args.query == "上海 咖啡"
+        return [
+            {
+                "title": "旧的上海咖啡探店",
+                "url": "https://www.xiaohongshu.com/explore/old",
+                "published_at": "2024-05-01T10:00:00+08:00",
+                "content": "安静 适合工作",
+            },
+            {
+                "title": "最新上海咖啡馆",
+                "link": "https://www.xiaohongshu.com/explore/new",
+                "timestamp": 1714701600,
+                "summary": "安静 有插座",
+            },
+            {
+                "title": "广告 上海咖啡",
+                "url": "https://www.xiaohongshu.com/explore/ad",
+                "published_at": "2025-01-01T10:00:00+08:00",
+                "content": "广告 安静",
+            },
+            {
+                "title": "没有链接的上海咖啡",
+                "published_at": "2026-01-01T10:00:00+08:00",
+                "content": "安静",
+            },
+        ]
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(
+                    fetcher=fake_fetch,
+                    endpoint="https://search.example.test/xhs",
+                    api_key="secret",
+                )
+            },
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {
+                "query": "上海 咖啡",
+                "require_keywords": ["安静"],
+                "exclude_keywords": ["广告"],
+                "limit": 10,
+            },
+        )
+
+        assert result.success is True
+        assert [item["title"] for item in result.content["items"]] == [
+            "最新上海咖啡馆",
+            "旧的上海咖啡探店",
+        ]
+        assert result.text.splitlines() == [
+            "2024-05-03 最新上海咖啡馆 https://www.xiaohongshu.com/explore/new",
+            "2024-05-01 旧的上海咖啡探店 https://www.xiaohongshu.com/explore/old",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_requires_endpoint(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={"xiaohongshu_search": create_setup(endpoint="")},
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {"query": "上海 咖啡"},
+        )
+
+        assert result.success is False
+        assert "XHS_SEARCH_ENDPOINT" in result.error
+
+    asyncio.run(scenario())

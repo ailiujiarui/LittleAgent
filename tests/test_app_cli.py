@@ -34,7 +34,8 @@ def test_app_runtime_dry_run_builds_services(tmp_path):
     assert "get_time" in summary["tools"]
     assert "message_push" in summary["tools"]
     assert "read_group_messages" in summary["tools"]
-    assert summary["plugins"]["loaded"] == ["group_messages"]
+    assert "search_xiaohongshu_posts" in summary["tools"]
+    assert summary["plugins"]["loaded"] == ["group_messages", "xiaohongshu_search"]
     assert (tmp_path / "agent.db").exists()
 
 
@@ -45,7 +46,7 @@ def test_app_runtime_startup_lines_show_listening_details(tmp_path):
     runtime = AppRuntime(
         AppConfig(
             workspace=tmp_path,
-            onebot=OneBotConfig(bot_uin="1158271244", port=8765),
+            onebot=OneBotConfig(bot_uin="123456789", port=8765),
         )
     )
 
@@ -53,7 +54,7 @@ def test_app_runtime_startup_lines_show_listening_details(tmp_path):
 
     assert "workspace: " + str(tmp_path) in lines
     assert "OneBot listening: ws://127.0.0.1:8765/onebot/v11/ws" in lines
-    assert "bot_uin: 1158271244" in lines
+    assert "bot_uin: 123456789" in lines
 
 
 def test_app_runtime_default_logger_flushes(monkeypatch, tmp_path):
