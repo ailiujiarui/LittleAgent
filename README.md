@@ -1,5 +1,7 @@
 # Mini Agent
 
+[中文说明](README.zh-CN.md)
+
 Minimal Akashic-inspired agent with direct OneBot v11 QQ entry, session workers,
 OpenAI-compatible tool calling, Markdown/SQLite memory, plugins, proactive push,
 Drift, dashboard APIs, and stdio MCP tool import.
