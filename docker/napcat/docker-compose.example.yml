@@ -1,0 +1,20 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:v4.8.119
+    container_name: mini-agent-napcat
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    environment:
+      TZ: Asia/Shanghai
+      ACCOUNT: "${NAPCAT_ACCOUNT:?set NAPCAT_ACCOUNT}"
+      WEBUI_PREFIX: ""
+      WEBUI_TOKEN: "${NAPCAT_WEBUI_TOKEN:?set NAPCAT_WEBUI_TOKEN}"
+    ports:
+      - "6099:6099"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config:/app/napcat/config
+      - ./qq-config:/app/.config/QQ
+      - ./logs:/app/napcat/logs

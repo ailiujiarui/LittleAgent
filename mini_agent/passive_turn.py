@@ -53,6 +53,11 @@ class PassiveTurnPipeline:
                     tool_call.arguments,
                     context=context,
                 )
+                if not result.success:
+                    return self._finish(
+                        session_key,
+                        _user_visible_tool_error(tool_call.name, result.error),
+                    )
                 chat_messages.append(_tool_result_message(tool_call, result.model_dump()))
 
         return self._finish(session_key, "Tool iteration limit reached.")
@@ -87,3 +92,13 @@ def _tool_result_message(tool_call: ToolCall, payload: Dict[str, Any]) -> Dict[s
         "tool_call_id": tool_call.id,
         "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
     }
+
+
+def _user_visible_tool_error(tool_name: str, error: str) -> str:
+    if "XHS_SEARCH_ENDPOINT" in error or "xiaohongshu-mcp" in error:
+        return (
+            "工具调用失败：小红书搜索数据源不可用。"
+            "请先启动并登录 xiaohongshu-mcp，确认 http://localhost:18060/mcp 可访问；"
+            "如果服务不在本机，请在 config.toml 的 [xiaohongshu] 中设置 search_endpoint。"
+        )
+    return f"工具调用失败：{tool_name}: {error}"

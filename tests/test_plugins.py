@@ -297,25 +297,385 @@ def test_xiaohongshu_search_plugin_filters_sorts_and_formats_links(tmp_path):
     asyncio.run(scenario())
 
 
-def test_xiaohongshu_search_plugin_requires_endpoint(tmp_path):
+def test_xiaohongshu_search_plugin_can_use_fetcher_without_endpoint(tmp_path):
     from mini_agent.plugins.manager import PluginManager
     from mini_agent.plugins.xiaohongshu_search import create_setup
     from mini_agent.tools.registry import ToolRegistry
+
+    async def fake_fetch(args, settings):
+        assert settings["endpoint"] == ""
+        return [
+            {
+                "title": "No endpoint fallback",
+                "url": "https://www.xiaohongshu.com/explore/fallback",
+                "published_at": "2026-06-13",
+                "content": args.query,
+            }
+        ]
 
     async def scenario():
         manager = PluginManager(
             workspace=tmp_path,
             tools=ToolRegistry(),
-            builtin_plugins={"xiaohongshu_search": create_setup(endpoint="")},
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(fetcher=fake_fetch, endpoint="")
+            },
         )
         manager.load_all()
 
         result = await manager.tools.execute(
             "search_xiaohongshu_posts",
-            {"query": "上海 咖啡"},
+            {"query": "agent remote", "limit": 5},
+        )
+
+        assert result.success is True
+        assert result.content["items"][0]["url"] == "https://www.xiaohongshu.com/explore/fallback"
+
+    asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_calls_http_mcp_with_latest_sort(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    calls = []
+
+    async def fake_transport(endpoint, payload, headers, timeout):
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "payload": payload,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return {
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"items":[{"title":"New role","url":"https://www.xiaohongshu.com/explore/new","published_at":"2026-06-13"}]}',
+                    }
+                ]
+            }
+        }
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(
+                    endpoint="http://localhost:18060/mcp",
+                    api_key="token",
+                    mcp_transport=fake_transport,
+                )
+            },
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {
+                "query": "agent startup remote role",
+                "require_keywords": ["role"],
+                "publish_time": "一周内",
+                "limit": 5,
+            },
+        )
+
+        assert result.success is True
+        assert result.content["items"][0]["title"] == "New role"
+        assert [call["payload"]["method"] for call in calls] == [
+            "initialize",
+            "tools/call",
+        ]
+        assert calls[1] == {
+            "endpoint": "http://localhost:18060/mcp",
+            "payload": {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_feeds",
+                    "arguments": {
+                        "keyword": "agent startup remote role",
+                        "filters": {
+                            "sort_by": "最新",
+                            "publish_time": "一周内",
+                        },
+                    },
+                },
+            },
+            "headers": {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": "Bearer token",
+            },
+            "timeout": 45,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_initializes_streamable_http_mcp_session(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    calls = []
+
+    async def fake_transport(endpoint, payload, headers, timeout):
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "payload": payload,
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        if payload["method"] == "initialize":
+            return {
+                "headers": {"mcp-session-id": "session-123"},
+                "body": {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {"tools": {"listChanged": True}},
+                        "serverInfo": {"name": "xiaohongshu-mcp", "version": "2.0.0"},
+                    },
+                },
+            }
+        return {
+            "body": {
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": '{"items":[{"title":"New role","url":"https://www.xiaohongshu.com/explore/new","published_at":"2026-06-13"}]}',
+                        }
+                    ]
+                }
+            }
+        }
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(
+                    endpoint="http://localhost:18060/mcp",
+                    api_key="token",
+                    mcp_transport=fake_transport,
+                )
+            },
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {"query": "agent startup remote role", "publish_time": "last week"},
+        )
+
+        assert result.success is True
+        assert [call["payload"]["method"] for call in calls] == [
+            "initialize",
+            "tools/call",
+        ]
+        assert calls[0]["payload"]["params"]["clientInfo"]["name"] == "mini-agent"
+        assert calls[1]["headers"]["Mcp-Session-Id"] == "session-123"
+        assert calls[1]["payload"]["params"]["arguments"]["filters"] == {
+            "sort_by": "最新",
+            "publish_time": "一周内",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_reports_mcp_connection_failure_actionably(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def fake_transport(endpoint, payload, headers, timeout):
+        raise RuntimeError("All connection attempts failed")
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(
+                    endpoint="http://localhost:18060/mcp",
+                    mcp_transport=fake_transport,
+                )
+            },
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {"query": "agent startup remote role"},
         )
 
         assert result.success is False
-        assert "XHS_SEARCH_ENDPOINT" in result.error
+        assert "xiaohongshu-mcp 连接失败" in result.error
+        assert "docker/xiaohongshu-mcp" in result.error
 
     asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_reports_mcp_timeout_actionably(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    class BlankTimeout(Exception):
+        def __str__(self):
+            return ""
+
+    async def fake_transport(endpoint, payload, headers, timeout):
+        if payload["method"] == "initialize":
+            return {
+                "headers": {"mcp-session-id": "session-123"},
+                "body": {"result": {"protocolVersion": "2025-03-26"}},
+            }
+        raise BlankTimeout()
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(
+                    endpoint="http://localhost:18060/mcp",
+                    mcp_transport=fake_transport,
+                )
+            },
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {"query": "agent startup remote role"},
+        )
+
+        assert result.success is False
+        assert "xiaohongshu-mcp 请求超时" in result.error
+        assert "扫码登录" in result.error
+
+    asyncio.run(scenario())
+
+
+def test_xiaohongshu_search_plugin_normalizes_mcp_feed_cards_newest_first(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.plugins.xiaohongshu_search import create_setup
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def fake_transport(endpoint, payload, headers, timeout):
+        return {
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": """
+                        {
+                          "feeds": [
+                            {
+                              "id": "old-note",
+                              "xsecToken": "old-token",
+                                "noteCard": {
+                                  "displayTitle": "Old agent role",
+                                  "desc": "remote startup",
+                                  "time": 1780185600000
+                                }
+                              },
+                            {
+                              "id": "new-note",
+                              "xsec_token": "new-token",
+                              "note_card": {
+                                "display_title": "New agent role",
+                                "desc": "remote startup",
+                                "time": 1780272000000
+                              }
+                            }
+                          ]
+                        }
+                        """,
+                    }
+                ]
+            }
+        }
+
+    async def scenario():
+        manager = PluginManager(
+            workspace=tmp_path,
+            tools=ToolRegistry(),
+            builtin_plugins={
+                "xiaohongshu_search": create_setup(
+                    endpoint="http://localhost:18060/mcp",
+                    mcp_transport=fake_transport,
+                )
+            },
+        )
+        manager.load_all()
+
+        result = await manager.tools.execute(
+            "search_xiaohongshu_posts",
+            {
+                "query": "agent startup remote role",
+                "require_keywords": ["remote"],
+                "limit": 10,
+            },
+        )
+
+        assert result.success is True
+        assert [item["title"] for item in result.content["items"]] == [
+            "New agent role",
+            "Old agent role",
+        ]
+        assert result.content["items"][0]["url"] == (
+            "https://www.xiaohongshu.com/explore/new-note?xsec_token=new-token"
+        )
+        assert result.text.splitlines() == [
+            "2026-06-01 New agent role https://www.xiaohongshu.com/explore/new-note?xsec_token=new-token",
+            "2026-05-31 Old agent role https://www.xiaohongshu.com/explore/old-note?xsec_token=old-token",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_xiaohongshu_public_search_parser_extracts_links_dates_and_text():
+    from mini_agent.plugins.xiaohongshu_search import (
+        SearchXiaohongshuPostsArgs,
+        _extract_public_search_results,
+        _select_items,
+    )
+
+    html = """
+    <li class="b_algo">
+      <h2><a href="https://www.xiaohongshu.com/explore/old-note">Old agent role</a></h2>
+      <p>2026-05-01 Agent startup remote role.</p>
+    </li>
+    <li class="b_algo">
+      <h2><a href="https://www.example.com/not-xhs">Ignore me</a></h2>
+      <p>2026-06-12 Agent startup remote role.</p>
+    </li>
+    <li class="b_algo">
+      <h2><a href="https://www.xiaohongshu.com/explore/new-note?xsec_token=abc">New agent role</a></h2>
+      <p>2026年6月12日 Agent startup remote role.</p>
+    </li>
+    """
+
+    raw_items = _extract_public_search_results(html)
+    items = _select_items(
+        raw_items,
+        SearchXiaohongshuPostsArgs(query="agent remote", limit=10),
+    )
+
+    assert [item["title"] for item in items] == ["New agent role", "Old agent role"]
+    assert items[0]["published_at"] == "2026-06-12"
+    assert items[0]["url"] == "https://www.xiaohongshu.com/explore/new-note?xsec_token=abc"

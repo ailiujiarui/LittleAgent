@@ -43,6 +43,11 @@ class MCPConfig(BaseModel):
     enabled: bool = True
 
 
+class XiaohongshuConfig(BaseModel):
+    search_endpoint: str = "http://localhost:18060/mcp"
+    search_api_key: str = ""
+
+
 class AppConfig(BaseModel):
     workspace: Path = Path("workspace")
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -50,6 +55,7 @@ class AppConfig(BaseModel):
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
 
 
 def load_config(path: Optional[Path] = None) -> AppConfig:

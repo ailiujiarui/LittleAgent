@@ -24,9 +24,17 @@ def test_cli_init_creates_workspace(tmp_path):
 
 def test_app_runtime_dry_run_builds_services(tmp_path):
     from mini_agent.app import AppRuntime
-    from mini_agent.config import AppConfig
+    from mini_agent.config import AppConfig, XiaohongshuConfig
 
-    runtime = AppRuntime(AppConfig(workspace=tmp_path))
+    runtime = AppRuntime(
+        AppConfig(
+            workspace=tmp_path,
+            xiaohongshu=XiaohongshuConfig(
+                search_endpoint="https://search.example.test/xhs",
+                search_api_key="secret",
+            ),
+        )
+    )
 
     summary = runtime.dry_run()
 
@@ -37,6 +45,32 @@ def test_app_runtime_dry_run_builds_services(tmp_path):
     assert "search_xiaohongshu_posts" in summary["tools"]
     assert summary["plugins"]["loaded"] == ["group_messages", "xiaohongshu_search"]
     assert (tmp_path / "agent.db").exists()
+
+
+def test_app_runtime_injects_xiaohongshu_config_into_plugin(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, XiaohongshuConfig
+
+    async def scenario():
+        runtime = AppRuntime(
+            AppConfig(
+                workspace=tmp_path,
+                xiaohongshu=XiaohongshuConfig(
+                    search_endpoint="https://search.example.test/xhs",
+                    search_api_key="secret",
+                ),
+            )
+        )
+        runtime.build_services()
+
+        tool = runtime.tools.get_tool("search_xiaohongshu_posts")
+
+        assert tool is not None
+        assert "https://search.example.test/xhs" in tool.description
+
+    import asyncio
+
+    asyncio.run(scenario())
 
 
 def test_app_runtime_startup_lines_show_listening_details(tmp_path):

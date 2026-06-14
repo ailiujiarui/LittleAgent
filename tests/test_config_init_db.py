@@ -10,6 +10,7 @@ def test_load_config_defaults_to_deepseek_openai_compatible(tmp_path, monkeypatc
 
     assert config.llm.base_url == "https://api.deepseek.com"
     assert config.llm.model == "deepseek-v4-flash"
+    assert config.xiaohongshu.search_endpoint == "http://localhost:18060/mcp"
 
 
 def test_load_config_expands_env_and_defaults(tmp_path, monkeypatch):
@@ -17,6 +18,7 @@ def test_load_config_expands_env_and_defaults(tmp_path, monkeypatch):
 
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "workspace"))
     monkeypatch.setenv("TEST_LLM_KEY", "sk-test")
+    monkeypatch.setenv("TEST_XHS_KEY", "xhs-secret")
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -26,6 +28,10 @@ workspace = "${AGENT_WORKSPACE}"
 base_url = "https://llm.example.test/v1"
 api_key = "${TEST_LLM_KEY}"
 model = "test-model"
+
+[xiaohongshu]
+search_endpoint = "https://search.example.test/xhs"
+search_api_key = "${TEST_XHS_KEY}"
 """.strip(),
         encoding="utf-8",
     )
@@ -38,6 +44,8 @@ model = "test-model"
     assert config.onebot.host == "127.0.0.1"
     assert config.onebot.port == 8765
     assert config.proactive.enabled is False
+    assert config.xiaohongshu.search_endpoint == "https://search.example.test/xhs"
+    assert config.xiaohongshu.search_api_key == "xhs-secret"
 
 
 def test_init_workspace_creates_expected_files_without_overwriting(tmp_path):

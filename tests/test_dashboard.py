@@ -1,6 +1,25 @@
 from fastapi.testclient import TestClient
 
 
+def test_dashboard_index_renders_operational_ui(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Mini Agent Dashboard" in html
+    assert 'id="runtime-status"' in html
+    assert 'id="workspace-path"' in html
+    assert 'id="memory-files"' in html
+    assert 'id="memory-editor"' in html
+    assert 'fetch("/api/status")' in html
+    assert 'fetch("/api/memory/files")' in html
+    assert len(html) > 5000
+
+
 def test_dashboard_status_endpoint(tmp_path):
     from mini_agent.dashboard.server import create_dashboard_app
 

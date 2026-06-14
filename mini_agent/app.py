@@ -15,7 +15,7 @@ from mini_agent.memory.store import MemoryStore
 from mini_agent.passive_turn import PassiveTurnPipeline
 from mini_agent.plugins.group_messages import setup as setup_group_messages
 from mini_agent.plugins.manager import PluginManager
-from mini_agent.plugins.xiaohongshu_search import setup as setup_xiaohongshu_search
+from mini_agent.plugins.xiaohongshu_search import create_setup as setup_xiaohongshu_search
 from mini_agent.tools.builtin import register_builtin_tools, register_memory_tools
 from mini_agent.tools.message_push import MessagePushTool
 from mini_agent.tools.registry import ToolRegistry
@@ -57,7 +57,10 @@ class AppRuntime:
             tools=self.tools,
             builtin_plugins={
                 "group_messages": setup_group_messages,
-                "xiaohongshu_search": setup_xiaohongshu_search,
+                "xiaohongshu_search": setup_xiaohongshu_search(
+                    endpoint=self.config.xiaohongshu.search_endpoint or None,
+                    api_key=self.config.xiaohongshu.search_api_key or None,
+                ),
             },
         )
         plugin_result = self.plugins.load_all()

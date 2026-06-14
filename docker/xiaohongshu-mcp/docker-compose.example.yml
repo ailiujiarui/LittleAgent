@@ -1,0 +1,19 @@
+services:
+  xiaohongshu-mcp:
+    image: xpzouying/xiaohongshu-mcp
+    container_name: mini-agent-xiaohongshu-mcp
+    init: true
+    tty: true
+    restart: unless-stopped
+    environment:
+      ROD_BROWSER_BIN: /usr/local/bin/cloak-chromium
+      COOKIES_PATH: /app/data/cookies.json
+      HOME: /app/data/home
+      XDG_CACHE_HOME: /app/data/cache
+      XDG_CONFIG_HOME: /app/data/config
+      XHS_PROXY: "${XHS_PROXY:-}"
+    ports:
+      - "18060:18060"
+    volumes:
+      - ./data:/app/data
+      - ./images:/app/images

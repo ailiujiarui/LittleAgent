@@ -16,13 +16,13 @@
 - Modify: `mini_agent/channels/onebot_qq.py`
 - Test: `tests/test_onebot_qq_channel.py`
 
-- [ ] Write a failing test showing a configured non-mention group message emits
+- [x] Write a failing test showing a configured non-mention group message emits
   `group_message` but does not enter the inbound bus.
-- [ ] Write a failing test showing a mention emits the plugin event and still
+- [x] Write a failing test showing a mention emits the plugin event and still
   enters the inbound bus.
-- [ ] Add an optional event emitter and split group observation from the
+- [x] Add an optional event emitter and split group observation from the
   existing reply gate.
-- [ ] Run `py -m pytest tests/test_onebot_qq_channel.py -q`.
+- [x] Run `py -m pytest tests/test_onebot_qq_channel.py -q`.
 
 ### Task 2: Group Message Plugin
 
@@ -31,12 +31,12 @@
 - Modify: `mini_agent/plugins/manager.py`
 - Test: `tests/test_plugins.py`
 
-- [ ] Write failing tests for archive/read, current-group inference, and rolling
+- [x] Write failing tests for archive/read, current-group inference, and rolling
   retention.
-- [ ] Allow `PluginManager` callers to provide built-in plugin setup functions.
-- [ ] Implement `group_messages.setup(ctx)` with a `group_message` subscription
+- [x] Allow `PluginManager` callers to provide built-in plugin setup functions.
+- [x] Implement `group_messages.setup(ctx)` with a `group_message` subscription
   and `read_group_messages` tool.
-- [ ] Run `py -m pytest tests/test_plugins.py -q`.
+- [x] Run `py -m pytest tests/test_plugins.py -q`.
 
 ### Task 3: Runtime Wiring
 
@@ -44,17 +44,17 @@
 - Modify: `mini_agent/app.py`
 - Test: `tests/test_app_cli.py`
 
-- [ ] Write a failing runtime test proving the plugin is loaded and a
+- [x] Write a failing runtime test proving the plugin is loaded and a
   non-mention group message is readable without entering the inbound bus.
-- [ ] Load the built-in plugin in `AppRuntime` and pass `plugins.emit` to the
+- [x] Load the built-in plugin in `AppRuntime` and pass `plugins.emit` to the
   OneBot channel.
-- [ ] Run `py -m pytest tests/test_app_cli.py -q`.
+- [x] Run `py -m pytest tests/test_app_cli.py -q`.
 
 ### Task 4: Full Verification
 
 **Files:**
 - No production changes expected.
 
-- [ ] Run `py -m pytest`.
-- [ ] Inspect `git diff --check`.
-- [ ] Confirm agent and NapCat remain stopped after verification.
+- [x] Run `py -m pytest`.
+- [x] Inspect `git diff --check`.
+- [x] Confirm agent and NapCat remain stopped after verification.

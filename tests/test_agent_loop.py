@@ -169,26 +169,117 @@ def test_passive_turn_tool_call_executes_and_feeds_result_back():
 
 
 def test_passive_turn_max_tool_iterations_returns_failure_message():
+    from pydantic import BaseModel
+
     from mini_agent.llm import LLMResponse, ToolCall
     from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.base import Tool
     from mini_agent.tools.registry import ToolRegistry
 
+    class NoArgs(BaseModel):
+        pass
+
     async def scenario():
+        registry = ToolRegistry()
+        registry.register(Tool("noop", "No-op", NoArgs, lambda args: {"ok": True}))
+
         class FakeLLM:
             async def chat(self, messages, tools):
                 return LLMResponse(
-                    tool_calls=[ToolCall(id="call-1", name="missing", arguments={})]
+                    tool_calls=[ToolCall(id="call-1", name="noop", arguments={})]
                 )
 
         pipeline = PassiveTurnPipeline(
             llm=FakeLLM(),
-            tools=ToolRegistry(),
+            tools=registry,
             max_tool_iterations=2,
         )
 
         result = await pipeline.run(_message("123", "loop forever"))
 
         assert "tool iteration limit" in result.lower()
+
+    asyncio.run(scenario())
+
+
+def test_passive_turn_returns_tool_error_without_second_model_guess():
+    from mini_agent.llm import LLMResponse, ToolCall
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages, tools):
+                self.calls += 1
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="missing",
+                            arguments={},
+                        )
+                    ]
+                )
+
+        llm = FakeLLM()
+        pipeline = PassiveTurnPipeline(llm=llm, tools=ToolRegistry())
+
+        result = await pipeline.run(_message("123", "use missing tool"))
+
+        assert llm.calls == 1
+        assert "工具调用失败" in result
+        assert "unknown tool: missing" in result
+
+    asyncio.run(scenario())
+
+
+def test_passive_turn_xiaohongshu_mcp_error_is_actionable():
+    from pydantic import BaseModel
+
+    from mini_agent.llm import LLMResponse, ToolCall
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.base import Tool, ToolResult
+    from mini_agent.tools.registry import ToolRegistry
+
+    class NoArgs(BaseModel):
+        pass
+
+    async def scenario():
+        registry = ToolRegistry()
+        registry.register(
+            Tool(
+                "search_xiaohongshu_posts",
+                "Search Xiaohongshu",
+                NoArgs,
+                lambda args: ToolResult(
+                    success=False,
+                    error="xiaohongshu-mcp returned non-JSON text content",
+                ),
+            )
+        )
+
+        class FakeLLM:
+            async def chat(self, messages, tools):
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="search_xiaohongshu_posts",
+                            arguments={},
+                        )
+                    ]
+                )
+
+        pipeline = PassiveTurnPipeline(llm=FakeLLM(), tools=registry)
+
+        result = await pipeline.run(_message("123", "搜小红书"))
+
+        assert "小红书搜索数据源不可用" in result
+        assert "xiaohongshu-mcp" in result
+        assert "http://localhost:18060/mcp" in result
 
     asyncio.run(scenario())
 

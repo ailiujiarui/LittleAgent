@@ -11,6 +11,10 @@ mini_agent.egg-info/
 *.db-shm
 *.db-wal
 docker/napcat/qrcode.png
+docker/napcat/docker-compose.yml
 docker/napcat/logs/
 docker/napcat/qq-config/
 docker/napcat/config/
+docker/xiaohongshu-mcp/docker-compose.yml
+docker/xiaohongshu-mcp/data/
+docker/xiaohongshu-mcp/images/
