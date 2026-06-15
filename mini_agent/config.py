@@ -30,17 +30,37 @@ class OneBotConfig(BaseModel):
     access_token: Optional[str] = None
 
 
+class ProactiveSourceConfig(BaseModel):
+    type: str
+    name: str
+    url: str
+
+
 class ProactiveConfig(BaseModel):
     enabled: bool = False
+    interval_seconds: int = 1800
+    threshold: float = 0.65
+    cooldown_minutes: int = 30
+    daily_max_pushes: int = 8
+    target_channel: str = "qq"
+    target_chat_id: str = ""
+    sources: List[ProactiveSourceConfig] = Field(default_factory=list)
 
 
 class DashboardConfig(BaseModel):
+    enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8787
 
 
 class MCPConfig(BaseModel):
     enabled: bool = True
+
+
+class DriftConfig(BaseModel):
+    enabled: bool = False
+    min_interval_minutes: int = 120
+    max_steps: int = 8
 
 
 class XiaohongshuConfig(BaseModel):
@@ -55,6 +75,7 @@ class AppConfig(BaseModel):
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    drift: DriftConfig = Field(default_factory=DriftConfig)
     xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
 
 

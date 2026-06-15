@@ -233,12 +233,13 @@ def test_outbound_private_message_builds_onebot_send_private_payload():
 
     channel = OneBotQQChannel(bot_id="10000")
 
-    assert channel.build_send_payload(
+    payload = channel.build_send_payload(
         OutboundMessage(channel="qq", chat_id="12345", text="pong")
-    ) == {
-        "action": "send_private_msg",
-        "params": {"user_id": 12345, "message": "pong"},
-    }
+    )
+
+    assert payload["action"] == "send_private_msg"
+    assert payload["params"] == {"user_id": 12345, "message": "pong"}
+    assert payload["echo"]
 
 
 def test_outbound_group_message_builds_onebot_send_group_payload():
@@ -246,12 +247,13 @@ def test_outbound_group_message_builds_onebot_send_group_payload():
 
     channel = OneBotQQChannel(bot_id="10000")
 
-    assert channel.build_send_payload(
+    payload = channel.build_send_payload(
         OutboundMessage(channel="qq", chat_id="gqq:67890", text="pong")
-    ) == {
-        "action": "send_group_msg",
-        "params": {"group_id": 67890, "message": "pong"},
-    }
+    )
+
+    assert payload["action"] == "send_group_msg"
+    assert payload["params"] == {"group_id": 67890, "message": "pong"}
+    assert payload["echo"]
 
 
 def test_onebot_channel_handle_event_publishes_to_bus():
@@ -315,11 +317,196 @@ def test_onebot_channel_send_writes_payload_to_socket():
             OutboundMessage(channel="qq", chat_id="12345", text="pong"),
         )
 
-        assert sent == [
-            {
-                "action": "send_private_msg",
-                "params": {"user_id": 12345, "message": "pong"},
-            }
+        assert sent[0]["action"] == "send_private_msg"
+        assert sent[0]["params"] == {"user_id": 12345, "message": "pong"}
+        assert sent[0]["echo"]
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_can_wait_for_echo_response():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        sent = []
+
+        class Socket:
+            async def send(self, data):
+                sent.append(json.loads(data))
+
+        channel = OneBotQQChannel(bot_id="10000")
+        task = asyncio.create_task(
+            channel.send_via_socket(
+                Socket(),
+                OutboundMessage(channel="qq", chat_id="12345", text="pong"),
+                wait_response=True,
+                timeout=1,
+            )
+        )
+        await asyncio.sleep(0)
+        await channel.handle_event({"echo": sent[0]["echo"], "status": "ok"})
+
+        assert await task == {"echo": sent[0]["echo"], "status": "ok"}
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_stores_path_and_access_token():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    channel = OneBotQQChannel(
+        bot_id="10000",
+        path="/onebot/v11/ws",
+        access_token="secret",
+    )
+
+    assert channel.path == "/onebot/v11/ws"
+    assert channel.access_token == "secret"
+
+
+def test_onebot_channel_rejects_wrong_websocket_path():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        class Request:
+            path = "/wrong/path"
+            headers = {}
+
+        class Socket:
+            request = Request()
+            remote_address = ("127.0.0.1", 10000)
+
+            def __init__(self):
+                self.close_calls = []
+
+            async def close(self, code=None, reason=None):
+                self.close_calls.append((code, reason))
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        socket = Socket()
+        channel = OneBotQQChannel(bot_id="10000", path="/onebot/v11/ws")
+
+        await channel._handle_socket(socket)
+
+        assert socket.close_calls == [(1008, "invalid OneBot path")]
+        assert socket not in channel._sockets
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_rejects_wrong_access_token():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        class Request:
+            path = "/onebot/v11/ws?access_token=wrong"
+            headers = {}
+
+        class Socket:
+            request = Request()
+            remote_address = ("127.0.0.1", 10000)
+
+            def __init__(self):
+                self.close_calls = []
+
+            async def close(self, code=None, reason=None):
+                self.close_calls.append((code, reason))
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        socket = Socket()
+        channel = OneBotQQChannel(
+            bot_id="10000",
+            path="/onebot/v11/ws",
+            access_token="secret",
+        )
+
+        await channel._handle_socket(socket)
+
+        assert socket.close_calls == [(1008, "invalid OneBot access token")]
+        assert socket not in channel._sockets
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_accepts_query_access_token():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        logs = []
+
+        class Request:
+            path = "/onebot/v11/ws?access_token=secret"
+            headers = {}
+
+        class Socket:
+            request = Request()
+            remote_address = ("127.0.0.1", 10000)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        channel = OneBotQQChannel(
+            bot_id="10000",
+            path="/onebot/v11/ws",
+            access_token="secret",
+            logger=logs.append,
+        )
+
+        await channel._handle_socket(Socket())
+
+        assert logs == [
+            "OneBot socket connected: ('127.0.0.1', 10000)",
+            "OneBot socket disconnected: ('127.0.0.1', 10000)",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_onebot_channel_accepts_bearer_access_token():
+    from mini_agent.channels.onebot_qq import OneBotQQChannel
+
+    async def scenario():
+        logs = []
+
+        class Request:
+            path = "/onebot/v11/ws"
+            headers = {"Authorization": "Bearer secret"}
+
+        class Socket:
+            request = Request()
+            remote_address = ("127.0.0.1", 10000)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        channel = OneBotQQChannel(
+            bot_id="10000",
+            path="/onebot/v11/ws",
+            access_token="secret",
+            logger=logs.append,
+        )
+
+        await channel._handle_socket(Socket())
+
+        assert logs == [
+            "OneBot socket connected: ('127.0.0.1', 10000)",
+            "OneBot socket disconnected: ('127.0.0.1', 10000)",
         ]
 
     asyncio.run(scenario())

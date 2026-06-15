@@ -18,10 +18,32 @@ require_at = true
 
 [proactive]
 enabled = false
+interval_seconds = 1800
+threshold = 0.65
+cooldown_minutes = 30
+daily_max_pushes = 8
+target_channel = "qq"
+target_chat_id = ""
+
+[[proactive.sources]]
+type = "rss"
+name = "agent-news"
+url = "https://example.test/feed.xml"
+
+[[proactive.sources]]
+type = "http_json"
+name = "alerts"
+url = "https://example.test/alerts.json"
 
 [dashboard]
+enabled = false
 host = "127.0.0.1"
 port = 8787
 
 [mcp]
 enabled = true
+
+[drift]
+enabled = false
+min_interval_minutes = 120
+max_steps = 8

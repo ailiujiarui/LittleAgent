@@ -32,6 +32,20 @@ model = "test-model"
 [xiaohongshu]
 search_endpoint = "https://search.example.test/xhs"
 search_api_key = "${TEST_XHS_KEY}"
+
+[proactive]
+enabled = true
+target_chat_id = "12345"
+
+[[proactive.sources]]
+type = "rss"
+name = "agent-news"
+url = "https://example.test/feed.xml"
+
+[[proactive.sources]]
+type = "http_json"
+name = "alerts"
+url = "https://example.test/alerts.json"
 """.strip(),
         encoding="utf-8",
     )
@@ -43,7 +57,11 @@ search_api_key = "${TEST_XHS_KEY}"
     assert config.llm.model == "test-model"
     assert config.onebot.host == "127.0.0.1"
     assert config.onebot.port == 8765
-    assert config.proactive.enabled is False
+    assert config.proactive.enabled is True
+    assert config.proactive.target_chat_id == "12345"
+    assert [source.type for source in config.proactive.sources] == ["rss", "http_json"]
+    assert config.proactive.sources[0].name == "agent-news"
+    assert config.proactive.sources[1].url == "https://example.test/alerts.json"
     assert config.xiaohongshu.search_endpoint == "https://search.example.test/xhs"
     assert config.xiaohongshu.search_api_key == "xhs-secret"
 

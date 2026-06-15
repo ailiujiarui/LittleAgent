@@ -310,3 +310,39 @@ def test_passive_turn_persists_user_and_assistant_messages(tmp_path):
         ]
 
     asyncio.run(scenario())
+
+
+def test_passive_turn_includes_memory_blocks_and_search_results(tmp_path):
+    from mini_agent.llm import LLMResponse
+    from mini_agent.memory.store import MemoryStore
+    from mini_agent.passive_turn import PassiveTurnPipeline
+    from mini_agent.tools.registry import ToolRegistry
+
+    async def scenario():
+        captured = {}
+
+        class FakeLLM:
+            async def chat(self, messages, tools):
+                captured["system"] = messages[0]["content"]
+                return LLMResponse(content="ok")
+
+        memory = MemoryStore(tmp_path)
+        (memory.memory_dir / "SELF.md").write_text("agent identity", encoding="utf-8")
+        (memory.memory_dir / "MEMORY.md").write_text("long term tea fact", encoding="utf-8")
+        (memory.memory_dir / "RECENT_CONTEXT.md").write_text("recent agent topic", encoding="utf-8")
+        memory.append_pending("User likes jasmine tea", keywords=["jasmine", "tea"])
+
+        pipeline = PassiveTurnPipeline(
+            llm=FakeLLM(),
+            tools=ToolRegistry(),
+            memory_store=memory,
+        )
+
+        await pipeline.run(_message("123", "tell me about tea"))
+
+        assert "agent identity" in captured["system"]
+        assert "long term tea fact" in captured["system"]
+        assert "recent agent topic" in captured["system"]
+        assert "User likes jasmine tea" in captured["system"]
+
+    asyncio.run(scenario())

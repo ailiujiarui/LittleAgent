@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from mini_agent.db.stores import MessageStore
 from mini_agent.llm import LLMResponse, ToolCall
+from mini_agent.memory.store import MemoryStore
 from mini_agent.models import InboundMessage
 from mini_agent.tools.registry import ToolRegistry
 
@@ -13,12 +14,14 @@ class PassiveTurnPipeline:
         llm: Optional[Any] = None,
         tools: Optional[ToolRegistry] = None,
         message_store: Optional[MessageStore] = None,
+        memory_store: Optional[MemoryStore] = None,
         system_prompt: str = "You are a helpful QQ agent.",
         max_tool_iterations: int = 6,
     ) -> None:
         self.llm = llm
         self.tools = tools or ToolRegistry()
         self.message_store = message_store
+        self.memory_store = memory_store
         self.system_prompt = system_prompt
         self.max_tool_iterations = max_tool_iterations
 
@@ -31,7 +34,7 @@ class PassiveTurnPipeline:
             self.message_store.add_message(session_key, "user", message.text)
 
         chat_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": self._build_system_prompt(session_key, message.text)},
             {"role": "user", "content": message.text},
         ]
         context = {
@@ -66,6 +69,21 @@ class PassiveTurnPipeline:
         if self.message_store is not None:
             self.message_store.add_message(session_key, "assistant", content)
         return content
+
+    def _build_system_prompt(self, session_key: str, query: str) -> str:
+        if self.memory_store is None:
+            return self.system_prompt
+
+        parts = [self.system_prompt, "\n\n# Memory Blocks"]
+        for block in self.memory_store.build_prompt_blocks(session_key, query):
+            parts.append(f"\n\n## {block.name}\n{block.content}")
+
+        items = self.memory_store.search(query)
+        if items:
+            parts.append("\n\n# Retrieved Memory")
+            for item in items:
+                parts.append(f"\n- {item.content}")
+        return "".join(parts)
 
 
 def _assistant_tool_call_message(response: LLMResponse) -> Dict[str, Any]:

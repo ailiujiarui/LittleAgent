@@ -44,7 +44,168 @@ def test_app_runtime_dry_run_builds_services(tmp_path):
     assert "read_group_messages" in summary["tools"]
     assert "search_xiaohongshu_posts" in summary["tools"]
     assert summary["plugins"]["loaded"] == ["group_messages", "xiaohongshu_search"]
+    assert summary["mcp"]["enabled"] is True
+    assert summary["proactive"]["enabled"] is False
+    assert summary["drift"]["enabled"] is False
+    assert summary["dashboard"]["enabled"] is False
     assert (tmp_path / "agent.db").exists()
+
+
+def test_app_runtime_start_runtime_services_connects_mcp(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig
+
+    async def scenario():
+        runtime = AppRuntime(AppConfig(workspace=tmp_path))
+        runtime.build_services()
+        calls = []
+
+        class FakeMcp:
+            failed = {}
+            server_tools = {"demo": ["echo"]}
+
+            async def connect_all(self):
+                calls.append("connect_all")
+
+        runtime.mcp = FakeMcp()
+
+        summary = await runtime.start_runtime_services(start_onebot=False)
+
+        assert calls == ["connect_all"]
+        assert summary["mcp"] == {"connected": {"demo": ["echo"]}, "failed": {}}
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_app_runtime_builds_proactive_and_drift_when_enabled(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, DriftConfig, ProactiveConfig, ProactiveSourceConfig
+
+    runtime = AppRuntime(
+        AppConfig(
+            workspace=tmp_path,
+            proactive=ProactiveConfig(
+                enabled=True,
+                target_chat_id="123",
+                sources=[
+                    ProactiveSourceConfig(
+                        type="rss",
+                        name="agent-news",
+                        url="https://example.test/feed.xml",
+                    ),
+                    ProactiveSourceConfig(
+                        type="http_json",
+                        name="alerts",
+                        url="https://example.test/alerts.json",
+                    ),
+                ],
+            ),
+            drift=DriftConfig(enabled=True),
+        )
+    )
+
+    summary = runtime.dry_run()
+
+    assert summary["proactive"]["enabled"] is True
+    assert summary["proactive"]["sources"] == ["agent-news", "alerts"]
+    assert summary["drift"]["enabled"] is True
+    assert runtime.proactive_loop is not None
+    assert [source.name for source in runtime.proactive_loop.sources] == [
+        "agent-news",
+        "alerts",
+    ]
+    assert runtime.drift_loop is not None
+
+
+def test_app_runtime_rejects_unknown_proactive_source_type(tmp_path):
+    import pytest
+
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, ProactiveConfig, ProactiveSourceConfig
+
+    runtime = AppRuntime(
+        AppConfig(
+            workspace=tmp_path,
+            proactive=ProactiveConfig(
+                enabled=True,
+                target_chat_id="123",
+                sources=[
+                    ProactiveSourceConfig(
+                        type="unsupported",
+                        name="bad",
+                        url="https://example.test/bad",
+                    )
+                ],
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="unsupported proactive source type"):
+        runtime.dry_run()
+
+
+def test_app_runtime_starts_background_proactive_task(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, ProactiveConfig
+
+    async def scenario():
+        runtime = AppRuntime(
+            AppConfig(
+                workspace=tmp_path,
+                proactive=ProactiveConfig(
+                    enabled=True,
+                    target_chat_id="123",
+                    interval_seconds=60,
+                ),
+            )
+        )
+        runtime.build_services()
+        await runtime.start_runtime_services(start_onebot=False)
+
+        assert len(runtime.background_tasks) == 1
+
+        await runtime.stop_runtime_services()
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_app_runtime_starts_dashboard_when_enabled(monkeypatch, tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, DashboardConfig
+
+    async def scenario():
+        runtime = AppRuntime(
+            AppConfig(
+                workspace=tmp_path,
+                dashboard=DashboardConfig(enabled=True, host="127.0.0.1", port=9898),
+            )
+        )
+        runtime.build_services()
+        calls = []
+
+        async def fake_start_dashboard():
+            calls.append((runtime.config.dashboard.host, runtime.config.dashboard.port))
+            return {"running": True, "url": "http://127.0.0.1:9898"}
+
+        monkeypatch.setattr(runtime, "_start_dashboard", fake_start_dashboard)
+
+        summary = await runtime.start_runtime_services(start_onebot=False)
+
+        assert calls == [("127.0.0.1", 9898)]
+        assert summary["dashboard"] == {
+            "running": True,
+            "url": "http://127.0.0.1:9898",
+        }
+
+        await runtime.stop_runtime_services()
+
+    import asyncio
+
+    asyncio.run(scenario())
 
 
 def test_app_runtime_injects_xiaohongshu_config_into_plugin(tmp_path):
@@ -89,6 +250,26 @@ def test_app_runtime_startup_lines_show_listening_details(tmp_path):
     assert "workspace: " + str(tmp_path) in lines
     assert "OneBot listening: ws://127.0.0.1:8765/onebot/v11/ws" in lines
     assert "bot_uin: 123456789" in lines
+
+
+def test_app_runtime_passes_onebot_path_and_access_token(tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, OneBotConfig
+
+    runtime = AppRuntime(
+        AppConfig(
+            workspace=tmp_path,
+            onebot=OneBotConfig(
+                path="/onebot/custom/ws",
+                access_token="secret",
+            ),
+        )
+    )
+
+    runtime.build_services()
+
+    assert runtime.onebot.path == "/onebot/custom/ws"
+    assert runtime.onebot.access_token == "secret"
 
 
 def test_app_runtime_default_logger_flushes(monkeypatch, tmp_path):

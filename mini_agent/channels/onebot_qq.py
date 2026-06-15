@@ -1,5 +1,8 @@
+import asyncio
 import json
 import re
+import uuid
+from urllib.parse import parse_qs, urlsplit
 from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Set
 
 from mini_agent.bus import MessageBus
@@ -19,13 +22,18 @@ class OneBotQQChannel:
         groups: Optional[Mapping[str, Mapping[str, Any]]] = None,
         logger: Optional[Callable[[str], None]] = None,
         event_emitter: Optional[EventEmitter] = None,
+        path: str = "/onebot/v11/ws",
+        access_token: Optional[str] = None,
     ) -> None:
         self.bot_id = str(bot_id)
         self.bus = bus
         self.logger = logger or (lambda message: None)
         self.event_emitter = event_emitter
+        self.path = path
+        self.access_token = access_token
         self._sockets = set()
         self._server = None
+        self._pending_echo: Dict[str, asyncio.Future] = {}
         self.allowed_private_users = _string_set(allowed_private_users)
         self.groups = {
             str(group_id): {
@@ -46,13 +54,19 @@ class OneBotQQChannel:
             return self._parse_group_event(event)
         return None
 
-    def build_send_payload(self, message: OutboundMessage) -> Dict[str, Any]:
+    def build_send_payload(
+        self,
+        message: OutboundMessage,
+        echo: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if message.channel != "qq":
             raise ValueError(f"unsupported channel: {message.channel}")
 
+        echo = echo or str(uuid.uuid4())
         if message.chat_id.startswith("gqq:"):
             return {
                 "action": "send_group_msg",
+                "echo": echo,
                 "params": {
                     "group_id": int(message.chat_id.removeprefix("gqq:")),
                     "message": message.text,
@@ -60,10 +74,18 @@ class OneBotQQChannel:
             }
         return {
             "action": "send_private_msg",
+            "echo": echo,
             "params": {"user_id": int(message.chat_id), "message": message.text},
         }
 
     async def handle_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
+        if "echo" in event:
+            echo = str(event.get("echo"))
+            future = self._pending_echo.pop(echo, None)
+            if future is not None and not future.done():
+                future.set_result(dict(event))
+            return None
+
         if self.event_emitter is not None:
             group_event = self._group_plugin_event(event)
             if group_event is not None:
@@ -85,8 +107,28 @@ class OneBotQQChannel:
             )
         return message
 
-    async def send_via_socket(self, socket: Any, message: OutboundMessage) -> None:
-        await socket.send(json.dumps(self.build_send_payload(message), ensure_ascii=False))
+    async def send_via_socket(
+        self,
+        socket: Any,
+        message: OutboundMessage,
+        wait_response: bool = False,
+        timeout: float = 30.0,
+    ) -> Optional[Dict[str, Any]]:
+        payload = self.build_send_payload(message)
+        echo = str(payload["echo"])
+        future: Optional[asyncio.Future] = None
+
+        if wait_response:
+            future = asyncio.get_running_loop().create_future()
+            self._pending_echo[echo] = future
+
+        try:
+            await socket.send(json.dumps(payload, ensure_ascii=False))
+            if future is None:
+                return None
+            return await asyncio.wait_for(future, timeout=timeout)
+        finally:
+            self._pending_echo.pop(echo, None)
 
     async def send(self, message: OutboundMessage) -> None:
         if not self._sockets:
@@ -109,6 +151,9 @@ class OneBotQQChannel:
             self._server = None
 
     async def _handle_socket(self, socket: Any) -> None:
+        if not await self._validate_socket(socket):
+            return
+
         self._sockets.add(socket)
         address = getattr(socket, "remote_address", "unknown")
         self.logger(f"OneBot socket connected: {address}")
@@ -118,6 +163,23 @@ class OneBotQQChannel:
         finally:
             self._sockets.discard(socket)
             self.logger(f"OneBot socket disconnected: {address}")
+
+    async def _validate_socket(self, socket: Any) -> bool:
+        raw_path = _socket_raw_path(socket)
+        if raw_path is None:
+            return True
+
+        parsed = urlsplit(raw_path)
+        if parsed.path != self.path:
+            self.logger(f"OneBot socket rejected: invalid path {parsed.path}")
+            await _close_socket(socket, "invalid OneBot path")
+            return False
+
+        if self.access_token and _socket_access_token(socket, parsed.query) != self.access_token:
+            self.logger("OneBot socket rejected: invalid access token")
+            await _close_socket(socket, "invalid OneBot access token")
+            return False
+        return True
 
     def _parse_private_event(self, event: Mapping[str, Any]) -> Optional[InboundMessage]:
         sender_id = str(event.get("user_id", ""))
@@ -186,6 +248,51 @@ class OneBotQQChannel:
 
 def _string_set(values: Optional[Iterable[Any]]) -> Set[str]:
     return {str(value) for value in (values or set())}
+
+
+async def _close_socket(socket: Any, reason: str) -> None:
+    close = getattr(socket, "close", None)
+    if close is not None:
+        await close(code=1008, reason=reason)
+
+
+def _socket_raw_path(socket: Any) -> Optional[str]:
+    request = getattr(socket, "request", None)
+    path = getattr(request, "path", None)
+    if path is None:
+        path = getattr(socket, "path", None)
+    if path is None:
+        return None
+    return str(path)
+
+
+def _socket_access_token(socket: Any, query: str) -> Optional[str]:
+    values = parse_qs(query).get("access_token")
+    if values:
+        return values[0]
+
+    request = getattr(socket, "request", None)
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        headers = getattr(socket, "request_headers", None)
+    if headers is None:
+        return None
+
+    authorization = _header_get(headers, "Authorization")
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return _header_get(headers, "access_token") or _header_get(headers, "x-access-token")
+
+
+def _header_get(headers: Any, name: str) -> Optional[str]:
+    getter = getattr(headers, "get", None)
+    if getter is not None:
+        value = getter(name)
+        if value is None:
+            value = getter(name.lower())
+        if value is not None:
+            return str(value)
+    return None
 
 
 def _optional_str(value: Any) -> Optional[str]:

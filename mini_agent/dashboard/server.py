@@ -1,11 +1,14 @@
+import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from mini_agent.db.migrations import apply_migrations
 from mini_agent.memory.store import WRITABLE_MEMORY_FILES, MemoryStore
 
 
@@ -19,6 +22,8 @@ def create_dashboard_app(
 ) -> FastAPI:
     workspace = Path(workspace)
     memory = MemoryStore(workspace)
+    db_path = workspace / "agent.db"
+    apply_migrations(db_path)
     runtime_status = {"running": False, **(status or {})}
 
     app = FastAPI(title="Mini Agent Dashboard")
@@ -47,6 +52,197 @@ def create_dashboard_app(
         memory.write_file(name, request.content)
         return {"saved": True, "backup": str(backup)}
 
+    @app.get("/api/sessions")
+    def list_sessions(limit: int = 50):
+        limit = _clamp_limit(limit)
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                select
+                    s.id,
+                    s.channel,
+                    s.chat_id,
+                    s.created_at,
+                    s.updated_at,
+                    count(m.id) as message_count
+                from sessions s
+                left join messages m on m.session_id = s.id
+                group by s.id, s.channel, s.chat_id, s.created_at, s.updated_at
+                order by s.updated_at desc, s.id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        return {
+            "sessions": [
+                {
+                    "id": row[0],
+                    "channel": row[1],
+                    "chat_id": row[2],
+                    "created_at": row[3],
+                    "updated_at": row[4],
+                    "message_count": int(row[5]),
+                }
+                for row in rows
+            ]
+        }
+
+    @app.get("/api/sessions/{session_id:path}")
+    def get_session(session_id: str):
+        with sqlite3.connect(db_path) as conn:
+            session = conn.execute(
+                """
+                select
+                    s.id,
+                    s.channel,
+                    s.chat_id,
+                    s.created_at,
+                    s.updated_at,
+                    count(m.id) as message_count
+                from sessions s
+                left join messages m on m.session_id = s.id
+                where s.id = ?
+                group by s.id, s.channel, s.chat_id, s.created_at, s.updated_at
+                """,
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise HTTPException(status_code=404, detail="session not found")
+
+            messages = conn.execute(
+                """
+                select id, role, content, created_at
+                from messages
+                where session_id = ?
+                order by id
+                """,
+                (session_id,),
+            ).fetchall()
+
+        return {
+            "session": {
+                "id": session[0],
+                "channel": session[1],
+                "chat_id": session[2],
+                "created_at": session[3],
+                "updated_at": session[4],
+                "message_count": int(session[5]),
+            },
+            "messages": [
+                {
+                    "id": row[0],
+                    "role": row[1],
+                    "content": row[2],
+                    "created_at": row[3],
+                }
+                for row in messages
+            ],
+        }
+
+    @app.get("/api/events")
+    def list_events(limit: int = 50):
+        limit = _clamp_limit(limit)
+        events: List[Dict[str, Any]] = []
+        with sqlite3.connect(db_path) as conn:
+            runtime_rows = conn.execute(
+                """
+                select id, event_type, payload_json, created_at
+                from runtime_events
+                order by created_at desc, id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+            tool_rows = conn.execute(
+                """
+                select id, session_id, tool_name, arguments_json, result_json, created_at
+                from tool_events
+                order by created_at desc, id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        for row in runtime_rows:
+            events.append(
+                {
+                    "kind": "runtime",
+                    "id": row[0],
+                    "event_type": row[1],
+                    "payload": _parse_json(row[2]),
+                    "created_at": row[3],
+                }
+            )
+        for row in tool_rows:
+            events.append(
+                {
+                    "kind": "tool",
+                    "id": row[0],
+                    "session_id": row[1],
+                    "tool_name": row[2],
+                    "arguments": _parse_json(row[3]),
+                    "result": _parse_json(row[4]),
+                    "created_at": row[5],
+                }
+            )
+
+        events.sort(key=lambda event: (event["created_at"], event["id"]), reverse=True)
+        return {"events": events[:limit]}
+
+    @app.get("/api/proactive")
+    def list_proactive_items(limit: int = 50):
+        limit = _clamp_limit(limit)
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                select id, source, item_key, title, url, judged_at, pushed_at
+                from proactive_items
+                order by id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        return {
+            "items": [
+                {
+                    "id": row[0],
+                    "source": row[1],
+                    "item_key": row[2],
+                    "title": row[3],
+                    "url": row[4],
+                    "judged_at": row[5],
+                    "pushed_at": row[6],
+                }
+                for row in rows
+            ]
+        }
+
+    @app.get("/api/drift")
+    def list_drift_runs(limit: int = 50):
+        limit = _clamp_limit(limit)
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                select id, started_at, finished_at, status, summary
+                from drift_runs
+                order by id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        return {
+            "runs": [
+                {
+                    "id": row[0],
+                    "started_at": row[1],
+                    "finished_at": row[2],
+                    "status": row[3],
+                    "summary": row[4],
+                }
+                for row in rows
+            ]
+        }
+
     return app
 
 
@@ -62,6 +258,17 @@ def _backup_memory_file(workspace: Path, path: Path) -> Path:
     backup_path = backup_dir / f"{path.name}.{stamp}.bak"
     backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     return backup_path
+
+
+def _clamp_limit(limit: int) -> int:
+    return max(1, min(int(limit), 200))
+
+
+def _parse_json(text: str) -> Any:
+    try:
+        return json.loads(text or "{}")
+    except json.JSONDecodeError:
+        return {"raw": text}
 
 
 def _dashboard_html() -> str:
@@ -412,6 +619,61 @@ def _dashboard_html() -> str:
       text-align: center;
     }
 
+    .data-band {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .data-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .data-section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .data-section h3 {
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      margin: 0;
+      padding: 12px 14px;
+    }
+
+    .data-list {
+      display: grid;
+      gap: 1px;
+      max-height: 260px;
+      overflow: auto;
+    }
+
+    .data-item {
+      background: #fbfcfd;
+      display: grid;
+      gap: 4px;
+      min-height: 56px;
+      padding: 10px 14px;
+    }
+
+    .data-item strong {
+      font-size: 13px;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+
+    .data-item span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
     @media (max-width: 820px) {
       .topbar {
         align-items: flex-start;
@@ -450,6 +712,10 @@ def _dashboard_html() -> str:
       .panel-actions {
         justify-content: flex-start;
         width: 100%;
+      }
+
+      .data-grid {
+        grid-template-columns: 1fr;
       }
 
       .editor-wrap {
@@ -502,6 +768,27 @@ def _dashboard_html() -> str:
             </div>
           </div>
         </section>
+
+        <section class="data-band" aria-label="Runtime data">
+          <div class="data-grid">
+            <section class="data-section" aria-labelledby="sessions-title">
+              <h3 id="sessions-title">Sessions</h3>
+              <div id="session-list" class="data-list"></div>
+            </section>
+            <section class="data-section" aria-labelledby="events-title">
+              <h3 id="events-title">Events</h3>
+              <div id="event-list" class="data-list"></div>
+            </section>
+            <section class="data-section" aria-labelledby="proactive-title">
+              <h3 id="proactive-title">Proactive</h3>
+              <div id="proactive-list" class="data-list"></div>
+            </section>
+            <section class="data-section" aria-labelledby="drift-title">
+              <h3 id="drift-title">Drift</h3>
+              <div id="drift-list" class="data-list"></div>
+            </section>
+          </div>
+        </section>
       </main>
     </div>
   </div>
@@ -526,7 +813,11 @@ def _dashboard_html() -> str:
       refreshButton: document.getElementById("refresh-button"),
       reloadFilesButton: document.getElementById("reload-files-button"),
       message: document.getElementById("dashboard-message"),
-      dirtyState: document.getElementById("dirty-state")
+      dirtyState: document.getElementById("dirty-state"),
+      sessionList: document.getElementById("session-list"),
+      eventList: document.getElementById("event-list"),
+      proactiveList: document.getElementById("proactive-list"),
+      driftList: document.getElementById("drift-list")
     };
 
     function setMessage(text, kind = "") {
@@ -581,6 +872,63 @@ def _dashboard_html() -> str:
       } catch (error) {
         el.memoryFiles.innerHTML = '<div class="empty-state">Cannot load memory files.</div>';
         setMessage("Cannot load memory files: " + error.message, "error");
+      }
+    }
+
+    async function loadOperationalData() {
+      try {
+        const sessions = await fetch("/api/sessions").then((response) => response.json());
+        const events = await fetch("/api/events").then((response) => response.json());
+        const proactive = await fetch("/api/proactive").then((response) => response.json());
+        const drift = await fetch("/api/drift").then((response) => response.json());
+
+        renderDataList(el.sessionList, sessions.sessions || [], (item) => ({
+          title: item.id,
+          meta: item.channel + " " + item.chat_id + " · " + item.message_count + " messages"
+        }));
+        renderDataList(el.eventList, events.events || [], (item) => ({
+          title: item.kind === "tool" ? item.tool_name : item.event_type,
+          meta: item.created_at || ""
+        }));
+        renderDataList(el.proactiveList, proactive.items || [], (item) => ({
+          title: item.title || item.item_key,
+          meta: (item.pushed_at ? "pushed " + item.pushed_at : "judged " + (item.judged_at || "pending")) + " · " + item.source
+        }));
+        renderDataList(el.driftList, drift.runs || [], (item) => ({
+          title: item.status,
+          meta: (item.finished_at || item.started_at || "") + " · " + item.summary
+        }));
+      } catch (error) {
+        renderDataList(el.sessionList, [], null, "Cannot load runtime data.");
+        renderDataList(el.eventList, [], null, "Cannot load runtime data.");
+        renderDataList(el.proactiveList, [], null, "Cannot load runtime data.");
+        renderDataList(el.driftList, [], null, "Cannot load runtime data.");
+      }
+    }
+
+    function renderDataList(target, items, mapper, emptyText = "No records yet.") {
+      target.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "data-item";
+        const text = document.createElement("span");
+        text.textContent = emptyText;
+        empty.appendChild(text);
+        target.appendChild(empty);
+        return;
+      }
+
+      for (const item of items.slice(0, 10)) {
+        const view = mapper(item);
+        const row = document.createElement("div");
+        row.className = "data-item";
+        const title = document.createElement("strong");
+        title.textContent = view.title || "Untitled";
+        const meta = document.createElement("span");
+        meta.textContent = view.meta || "";
+        row.appendChild(title);
+        row.appendChild(meta);
+        target.appendChild(row);
       }
     }
 
@@ -657,7 +1005,7 @@ def _dashboard_html() -> str:
 
     async function refreshAll() {
       setMessage("Refreshing dashboard...");
-      await Promise.all([loadStatus(), loadFiles()]);
+      await Promise.all([loadStatus(), loadFiles(), loadOperationalData()]);
       if (state.selectedFile) {
         await selectFile(state.selectedFile);
       }
