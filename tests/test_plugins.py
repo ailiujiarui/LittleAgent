@@ -1,5 +1,8 @@
 import asyncio
+import sqlite3
 import textwrap
+
+import pytest
 
 
 def _write_plugin(root, name, source):
@@ -7,6 +10,146 @@ def _write_plugin(root, name, source):
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "plugin.py").write_text(textwrap.dedent(source), encoding="utf-8")
     return plugin_dir
+
+
+def test_plugin_state_defaults_and_source_identity(tmp_path):
+    from mini_agent.plugins.state import PluginStateStore
+
+    store = PluginStateStore(tmp_path / "agent.db")
+
+    builtin = store.ensure("builtin", "echo", default_enabled=True)
+    workspace = store.ensure("workspace", "echo", default_enabled=False)
+
+    assert builtin.source == "builtin"
+    assert builtin.name == "echo"
+    assert builtin.enabled is True
+    assert builtin.locked is False
+    assert workspace.source == "workspace"
+    assert workspace.name == "echo"
+    assert workspace.enabled is False
+    assert workspace.locked is False
+    assert store.get("builtin", "echo").enabled is True
+    assert store.get("workspace", "echo").enabled is False
+    assert store.get("workspace", "missing") is None
+
+
+def test_plugin_state_updates_are_source_isolated(tmp_path):
+    from mini_agent.plugins.state import PluginStateStore
+
+    store = PluginStateStore(tmp_path / "agent.db")
+    store.ensure("builtin", "echo", default_enabled=True)
+    store.ensure("workspace", "echo", default_enabled=False)
+
+    store.set_enabled("builtin", "echo", False)
+    store.set_error("workspace", "echo", "workspace failed")
+
+    builtin = store.get("builtin", "echo")
+    workspace = store.get("workspace", "echo")
+
+    assert builtin.enabled is False
+    assert builtin.last_error == ""
+    assert workspace.enabled is False
+    assert workspace.last_error == "workspace failed"
+
+
+def test_plugin_state_writes_touch_updated_at_and_fields(tmp_path):
+    from mini_agent.plugins.state import PluginStateStore
+
+    db_path = tmp_path / "agent.db"
+    store = PluginStateStore(db_path)
+    state = store.ensure("workspace", "echo", default_enabled=False)
+
+    assert state.updated_at
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            update plugin_states set updated_at = '2000-01-01 00:00:00'
+            where source = 'workspace' and name = 'echo'
+            """
+        )
+        conn.commit()
+
+    enabled = store.set_enabled("workspace", "echo", True)
+
+    assert enabled.enabled is True
+    assert enabled.updated_at != "2000-01-01 00:00:00"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            update plugin_states set updated_at = '2000-01-01 00:00:00'
+            where source = 'workspace' and name = 'echo'
+            """
+        )
+        conn.commit()
+
+    loaded = store.set_loaded("workspace", "echo")
+
+    assert loaded.last_loaded_at is not None
+    assert loaded.last_error == ""
+    assert loaded.updated_at != "2000-01-01 00:00:00"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            update plugin_states set updated_at = '2000-01-01 00:00:00'
+            where source = 'workspace' and name = 'echo'
+            """
+        )
+        conn.commit()
+
+    failed = store.set_error("workspace", "echo", "boom")
+
+    assert failed.last_error == "boom"
+    assert failed.updated_at != "2000-01-01 00:00:00"
+
+
+@pytest.mark.xfail(
+    reason="Task3 adds PluginContext plugin_id support for source-aware KV isolation.",
+    strict=True,
+)
+def test_plugin_context_kv_uses_stable_plugin_id_for_same_name_sources(tmp_path):
+    from mini_agent.plugins.context import PluginContext, PluginKVStore
+    from mini_agent.tools.registry import ToolRegistry
+
+    db_path = tmp_path / "agent.db"
+    kv_store = PluginKVStore(db_path)
+    handlers = {}
+    builtin = PluginContext(
+        name="echo",
+        plugin_id="builtin:echo",
+        workspace=tmp_path,
+        plugin_dir=tmp_path / "builtin",
+        tools=ToolRegistry(),
+        kv_store=kv_store,
+        event_handlers=handlers,
+    )
+    workspace = PluginContext(
+        name="echo",
+        plugin_id="workspace:echo",
+        workspace=tmp_path,
+        plugin_dir=tmp_path / "plugins" / "echo",
+        tools=ToolRegistry(),
+        kv_store=kv_store,
+        event_handlers=handlers,
+    )
+
+    builtin.kv_set("private", "builtin value")
+    workspace.kv_set("private", "workspace value")
+
+    assert builtin.kv_get("private") == "builtin value"
+    assert workspace.kv_get("private") == "workspace value"
+
+    with sqlite3.connect(db_path) as conn:
+        plugin_names = {
+            row[0]
+            for row in conn.execute(
+                "select plugin_name from plugin_kv order by plugin_name"
+            ).fetchall()
+        }
+
+    assert plugin_names == {"builtin:echo", "workspace:echo"}
 
 
 def test_plugin_manager_discovers_and_calls_setup_registering_tool(tmp_path):
