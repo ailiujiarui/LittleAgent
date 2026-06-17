@@ -19,6 +19,7 @@ def test_load_config_expands_env_and_defaults(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "workspace"))
     monkeypatch.setenv("TEST_LLM_KEY", "sk-test")
     monkeypatch.setenv("TEST_XHS_KEY", "xhs-secret")
+    monkeypatch.setenv("TEST_DASHBOARD_TOKEN", "dash-secret")
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -32,6 +33,10 @@ model = "test-model"
 [xiaohongshu]
 search_endpoint = "https://search.example.test/xhs"
 search_api_key = "${TEST_XHS_KEY}"
+
+[dashboard]
+enabled = true
+access_token = "${TEST_DASHBOARD_TOKEN}"
 
 [proactive]
 enabled = true
@@ -64,6 +69,8 @@ url = "https://example.test/alerts.json"
     assert config.proactive.sources[1].url == "https://example.test/alerts.json"
     assert config.xiaohongshu.search_endpoint == "https://search.example.test/xhs"
     assert config.xiaohongshu.search_api_key == "xhs-secret"
+    assert config.dashboard.enabled is True
+    assert config.dashboard.access_token == "dash-secret"
 
 
 def test_init_workspace_creates_expected_files_without_overwriting(tmp_path):

@@ -11,6 +11,55 @@ def test_cli_exposes_expected_commands():
         assert command in result.output
 
 
+def test_dashboard_cli_exposes_access_token_option():
+    from mini_agent.__main__ import app
+
+    result = CliRunner().invoke(app, ["dashboard", "--help"])
+
+    assert result.exit_code == 0
+    assert "--access-token" in result.output
+
+
+def test_dashboard_cli_passes_access_token(monkeypatch, tmp_path):
+    from mini_agent.__main__ import app
+
+    captured = {}
+
+    def fake_create_dashboard_app(workspace, access_token=None):
+        captured["workspace"] = workspace
+        captured["access_token"] = access_token
+        return object()
+
+    def fake_uvicorn_run(app_instance, host, port):
+        captured["app"] = app_instance
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("mini_agent.__main__.create_dashboard_app", fake_create_dashboard_app)
+    monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "dashboard",
+            "--workspace",
+            str(tmp_path),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9898",
+            "--access-token",
+            "secret",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["workspace"] == tmp_path
+    assert captured["access_token"] == "secret"
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 9898
+
+
 def test_cli_init_creates_workspace(tmp_path):
     from mini_agent.__main__ import app
 
@@ -202,6 +251,64 @@ def test_app_runtime_starts_dashboard_when_enabled(monkeypatch, tmp_path):
         }
 
         await runtime.stop_runtime_services()
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_app_runtime_passes_dashboard_access_token(monkeypatch, tmp_path):
+    from mini_agent.app import AppRuntime
+    from mini_agent.config import AppConfig, DashboardConfig, MCPConfig
+
+    async def scenario():
+        captured = {}
+
+        def fake_create_dashboard_app(workspace, status=None, access_token=None):
+            captured["workspace"] = workspace
+            captured["status"] = status
+            captured["access_token"] = access_token
+            return object()
+
+        class FakeConfig:
+            def __init__(self, app, host, port, log_level):
+                captured["host"] = host
+                captured["port"] = port
+                captured["log_level"] = log_level
+
+        class FakeServer:
+            def __init__(self, config):
+                self.config = config
+                self.started = True
+                self.should_exit = False
+
+            async def serve(self):
+                return None
+
+        monkeypatch.setattr("mini_agent.app.create_dashboard_app", fake_create_dashboard_app)
+        monkeypatch.setattr("uvicorn.Config", FakeConfig)
+        monkeypatch.setattr("uvicorn.Server", FakeServer)
+
+        runtime = AppRuntime(
+            AppConfig(
+                workspace=tmp_path,
+                mcp=MCPConfig(enabled=False),
+                dashboard=DashboardConfig(
+                    enabled=True,
+                    host="127.0.0.1",
+                    port=9898,
+                    access_token="secret",
+                ),
+            )
+        )
+        runtime.build_services()
+
+        await runtime.start_runtime_services(start_onebot=False)
+        await runtime.stop_runtime_services()
+
+        assert captured["access_token"] == "secret"
+        assert captured["host"] == "127.0.0.1"
+        assert captured["port"] == 9898
 
     import asyncio
 

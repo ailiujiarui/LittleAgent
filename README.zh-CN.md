@@ -376,25 +376,41 @@ py -m mini_agent mcp-list --workspace workspace
 
 ## Dashboard
 
-Dashboard 可以在浏览器中查看运行状态、列出 workspace 记忆文件、编辑记忆
-文件并在保存前自动生成备份。页面也会只读展示最近会话、运行事件、主动推送
-记录和 Drift 运行记录：
+Dashboard 是一个中文控制台，可以在浏览器里查看运行状态、列出 workspace 记忆文件、
+编辑记忆文件并在保存前自动生成备份。页面也会只读展示最近会话、运行事件、主动推送
+记录和 Drift 运行记录。
+
+单独启动控制台：
 
 ```bash
-py -m mini_agent dashboard --workspace workspace --host 127.0.0.1 --port 8787
+py -m mini_agent dashboard --workspace workspace --host 127.0.0.1 --port 8787 --access-token your-dashboard-token
 ```
+
+打开浏览器访问：
+
+```text
+http://127.0.0.1:8787
+```
+
+如果设置了访问令牌，页面会先显示中文登录页；输入 `--access-token` 对应的令牌后进入控制台。
+登录成功后，服务端会写入一个 `HttpOnly` 会话 cookie；令牌不会出现在页面源码或浏览器地址栏里。
 
 Dashboard 对可读写的记忆文件做了白名单限制，并在写入前生成备份。也可以
 直接使用 `/api/status`、`/api/memory/files`、`/api/sessions`、`/api/events`、
-`/api/proactive` 和 `/api/drift` 等 API 做自动化检查。
+`/api/proactive` 和 `/api/drift` 等 API 做自动化检查。配置访问令牌后，API 需要带上：
 
-如果希望 Dashboard 随 Agent 一起启动，可以在配置中启用：
+```text
+Authorization: Bearer your-dashboard-token
+```
+
+如果希望 Dashboard 随 Agent 一起启动，可以在配置中启用。建议令牌使用环境变量：
 
 ```toml
 [dashboard]
 enabled = true
 host = "127.0.0.1"
 port = 8787
+access_token = "${DASHBOARD_ACCESS_TOKEN}"
 ```
 
 ## 主动推送和 Drift
@@ -440,6 +456,7 @@ max_steps = 8
 - 不要提交 `config.toml`。
 - 不要提交 `workspace/`，里面可能包含记忆、插件 KV 和会话数据库。
 - 不要提交 NapCat 的二维码、QQ 登录态、消息数据库和日志。
+- Dashboard 如果绑定到非本机地址，必须设置 `dashboard.access_token`，并避免把令牌写入仓库。
 - 群消息归档会保存群消息文本，请只在你有权限的群里启用。
 - 如果密钥曾经暴露，应该立即去服务商后台轮换密钥。
 
@@ -473,7 +490,7 @@ py -m pytest
 - 群消息读取只覆盖机器人在线期间收到的消息。
 - 主动推送只有在配置数据源后才会产生候选内容；没有数据源时后台循环会空跑。
 - Drift 只会执行 `workspace/drift/skills/*.md` 中的本地技能文件。
-- 目前没有完整的 Web 管理后台权限系统。
+- Dashboard 有单令牌访问保护，但还没有多用户、角色权限和登录审计系统。
 - 目前没有多实例分布式协调。
 - QQ 接入依赖 NapCat 或其他 OneBot v11 兼容实现的稳定性。
 

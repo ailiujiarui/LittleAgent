@@ -70,6 +70,7 @@ def test_dashboard_returns_404_for_missing_session(tmp_path):
     response = client.get("/api/sessions/missing")
 
     assert response.status_code == 404
+    assert response.json()["detail"] == "会话不存在"
 
 
 def test_dashboard_lists_events_proactive_items_and_drift_runs(tmp_path):
@@ -164,7 +165,16 @@ def test_dashboard_index_renders_operational_ui(tmp_path):
 
     assert response.status_code == 200
     html = response.text
-    assert "Mini Agent Dashboard" in html
+    assert "小助手控制台" in html
+    assert "记忆文件" in html
+    assert "运行状态" in html
+    assert "最近会话" in html
+    assert "运行事件" in html
+    assert "主动推送" in html
+    assert "漂移任务" in html
+    assert "Mini Agent Dashboard" not in html
+    assert "Memory Files" not in html
+    assert "Refresh" not in html
     assert 'id="runtime-status"' in html
     assert 'id="workspace-path"' in html
     assert 'id="memory-files"' in html
@@ -173,13 +183,87 @@ def test_dashboard_index_renders_operational_ui(tmp_path):
     assert 'id="event-list"' in html
     assert 'id="proactive-list"' in html
     assert 'id="drift-list"' in html
-    assert 'fetch("/api/status")' in html
-    assert 'fetch("/api/memory/files")' in html
-    assert 'fetch("/api/sessions")' in html
-    assert 'fetch("/api/events")' in html
-    assert 'fetch("/api/proactive")' in html
-    assert 'fetch("/api/drift")' in html
+    assert 'fetchJson("/api/status")' in html
+    assert 'fetchJson("/api/memory/files")' in html
+    assert 'fetchJson("/api/sessions")' in html
+    assert 'fetchJson("/api/events")' in html
+    assert 'fetchJson("/api/proactive")' in html
+    assert 'fetchJson("/api/drift")' in html
+    assert "请求失败（HTTP " in html
+    assert "response.statusText" not in html
     assert len(html) > 5000
+
+
+def test_dashboard_token_protects_api_when_configured(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path, access_token="secret"))
+
+    unauthorized = client.get("/api/status")
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["detail"] == "未授权"
+    assert client.get("/api/status?token=wrong").status_code == 401
+    assert client.get("/api/status?token=secret").status_code == 401
+    assert (
+        client.get(
+            "/api/status",
+            headers={"Authorization": "Bearer secret"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/api/status",
+            headers={"Authorization": "bearer secret"},
+        ).status_code
+        == 200
+    )
+
+
+def test_dashboard_login_sets_http_only_session_cookie(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path, access_token="secret"))
+
+    bad_login = client.post("/api/login", json={"token": "wrong"})
+    assert bad_login.status_code == 401
+    assert bad_login.json()["detail"] == "访问令牌不正确"
+
+    good_login = client.post("/api/login", json={"token": "secret"})
+
+    assert good_login.status_code == 200
+    assert good_login.json() == {"ok": True}
+    assert "dashboard_session=" in good_login.headers["set-cookie"]
+    assert "HttpOnly" in good_login.headers["set-cookie"]
+    assert client.get("/api/status").status_code == 200
+
+
+def test_dashboard_login_page_and_authenticated_index_are_chinese(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path, access_token="secret"))
+
+    login = client.get("/")
+    tokenized = client.get("/?token=secret")
+
+    assert login.status_code == 200
+    assert "访问令牌" in login.text
+    assert "进入控制台" in login.text
+    assert "访问令牌不正确" in login.text
+    assert "Login" not in login.text
+    assert "secret" not in login.text
+    assert tokenized.status_code == 200
+    assert "访问令牌" in tokenized.text
+    assert "小助手控制台" in tokenized.text
+
+    client.post("/api/login", json={"token": "secret"})
+    dashboard = client.get("/")
+
+    assert dashboard.status_code == 200
+    assert "小助手控制台" in dashboard.text
+    assert "window.__DASHBOARD_TOKEN__" not in dashboard.text
+    assert "secret" not in dashboard.text
+    assert "API" not in dashboard.text
 
 
 def test_dashboard_status_endpoint(tmp_path):
@@ -224,3 +308,4 @@ def test_dashboard_rejects_path_traversal(tmp_path):
     response = client.get("/api/memory/files/..%2Fconfig.toml")
 
     assert response.status_code == 400
+    assert response.json()["detail"] == "不支持的记忆文件"

@@ -269,6 +269,7 @@ class AppRuntime:
                 "running": True,
                 "mcp": self._runtime_summary.get("mcp", {}),
             },
+            access_token=self.config.dashboard.access_token or None,
         )
         config = uvicorn.Config(
             dashboard_app,

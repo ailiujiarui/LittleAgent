@@ -51,6 +51,7 @@ class DashboardConfig(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8787
+    access_token: str = ""
 
 
 class MCPConfig(BaseModel):

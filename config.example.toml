@@ -39,6 +39,7 @@ url = "https://example.test/alerts.json"
 enabled = false
 host = "127.0.0.1"
 port = 8787
+access_token = "${DASHBOARD_ACCESS_TOKEN}"
 
 [mcp]
 enabled = true

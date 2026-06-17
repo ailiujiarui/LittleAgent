@@ -52,10 +52,15 @@ def dashboard(
     workspace: Path = typer.Option(Path("workspace"), "--workspace"),
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8787, "--port"),
+    access_token: str = typer.Option("", "--access-token"),
 ) -> None:
     import uvicorn
 
-    uvicorn.run(create_dashboard_app(workspace), host=host, port=port)
+    uvicorn.run(
+        create_dashboard_app(workspace, access_token=access_token or None),
+        host=host,
+        port=port,
+    )
 
 
 @app.command("qq-check")
