@@ -61,11 +61,17 @@ Dashboard 不直接操作工具注册表和事件表，只调用 `PluginManager`
 - `active`: 当前进程已经加载的插件运行时对象。
 - `states`: SQLite 中持久化的启用状态、锁定状态、最近错误和更新时间。
 
+插件以 `(source, name)` 作为真实身份，展示时可显示 `name`，API 和持久化都不得只用
+`name` 判断唯一性。第一版允许内置插件和 workspace 插件同名，但 Dashboard 会把它们
+显示为不同来源的两条记录。前端可以把稳定 ID 表示为 `builtin:group_messages` 或
+`workspace:my_plugin`。
+
 每个已加载插件记录为 `PluginRuntime`：
 
 ```text
 name
 source: builtin / workspace
+id: source:name
 plugin_dir
 module
 setup
@@ -78,8 +84,18 @@ last_error
 
 为了支持卸载，需要补两个基础能力：
 
-- `ToolRegistry.unregister_source(source_type="plugin", source_name=name)` 删除某插件注册的工具。
+- `ToolRegistry` 保存工具来源 metadata，并提供
+  `unregister_source(source_type="plugin", source_name=plugin_id)` 删除某插件注册的工具。
 - `PluginContext.subscribe(...)` 记录 handler 属于哪个插件，禁用时可以移除该插件事件订阅。
+
+`PluginContext.register_tool()` 需要把插件 ID 传给 `ToolRegistry.register()`，并同时把工具名
+记录到当前 `PluginRuntime.registered_tools[]`。卸载时以来源 metadata 清理为主，
+`registered_tools[]` 用于测试断言和错误排查。这样即使插件注册工具后 `setup()` 抛错，
+系统也能清理本次 setup 已经写入的工具。
+
+插件管理操作需要互斥。第一版使用 `PluginManager` 级别的 `asyncio.Lock` 串行化
+`enable/disable/reload`，避免同一时间重复注册、卸载与加载交错或事件 handler 残留。
+这个锁简单保守，符合轻量目标；如果以后插件数量和操作频率变高，再考虑插件级锁。
 
 禁用流程：
 
@@ -98,9 +114,11 @@ last_error
 1. SQLite 写入 `enabled=true`。
 2. runtime 模式下：
    - 加载模块。
+   - 创建临时 `PluginRuntime` 记录本次 setup 注册的工具和事件订阅。
    - 调用 `setup(ctx)`。
-   - 记录工具和事件订阅。
+   - setup 成功后，把临时 runtime 放入 `active`。
    - 成功标记为 `loaded`，失败标记为 `failed` 并记录错误。
+   - 如果 setup 失败，必须清理本次 setup 已注册的工具和事件订阅，再记录 `last_error`。
 3. standalone 模式下：
    - 只写 SQLite。
    - 返回 `requires_restart=true` 和中文提示。
@@ -114,6 +132,7 @@ last_error
 
 - 插件报错不影响 Agent 主进程。
 - `teardown` 报错只记录错误，不阻止工具和事件清理。
+- `setup` 半失败时必须回滚本次已注册资源，不能残留可调用工具或事件 handler。
 - 不强杀正在执行中的插件函数；禁用后不再接受新的工具调用和事件回调。
 - 不做文件监听；用户在 Dashboard 点“重载”。
 - 未来可通过 `locked=true` 标记系统必需插件，禁止关闭。
@@ -186,9 +205,9 @@ GET  /api/drift
 
 ```text
 GET  /api/plugins
-POST /api/plugins/{name}/enable
-POST /api/plugins/{name}/disable
-POST /api/plugins/{name}/reload
+POST /api/plugins/{source}/{name}/enable
+POST /api/plugins/{source}/{name}/disable
+POST /api/plugins/{source}/{name}/reload
 ```
 
 `GET /api/plugins` 返回：
@@ -200,6 +219,7 @@ POST /api/plugins/{name}/reload
     {
       "name": "group_messages",
       "source": "builtin",
+      "id": "builtin:group_messages",
       "enabled": true,
       "loaded": true,
       "locked": false,
@@ -220,6 +240,8 @@ POST /api/plugins/{name}/reload
   "ok": true,
   "plugin": {
     "name": "xiaohongshu_search",
+    "source": "builtin",
+    "id": "builtin:xiaohongshu_search",
     "enabled": true,
     "loaded": true,
     "last_error": ""
@@ -243,6 +265,20 @@ create_dashboard_app(
 - `plugin_manager is not None`: runtime 模式，插件操作立即生效。
 - `plugin_manager is None`: standalone 模式，只修改 SQLite 状态。
 
+`AppRuntime._start_dashboard()` 必须把 `self.plugins` 传给 `create_dashboard_app()`。
+对应测试需要验证随 Agent 启动的 Dashboard 返回 `mode=runtime`，并且插件操作会立即改变
+当前进程的工具注册表和事件订阅。
+
+standalone 模式没有运行中的 `PluginManager`，但仍要能发现插件列表。后端需要提供一个轻量
+`PluginCatalog`：
+
+- 内置插件目录由 `AppRuntime` 当前注册的内置插件清单抽成共享函数，例如
+  `build_builtin_plugin_specs(config)` 或不依赖运行时配置的 `builtin_plugin_specs()`。
+- workspace 插件通过扫描 `workspace/plugins/*/plugin.py` 获得。
+- 对于 `xiaohongshu_search` 这类 setup 依赖配置的内置插件，standalone 只展示插件元信息和
+  SQLite 状态，不执行 setup。
+- standalone 操作只更新 `plugin_states`，返回 `requires_restart=true`。
+
 错误规则：
 
 - 找不到插件：`404 插件不存在`。
@@ -256,17 +292,27 @@ create_dashboard_app(
 
 ```sql
 create table if not exists plugin_states (
-    name text primary key,
     source text not null,
+    name text not null,
     enabled integer not null,
     locked integer not null default 0,
     last_loaded_at text,
     last_error text not null default '',
-    updated_at text not null default current_timestamp
+    updated_at text not null default current_timestamp,
+    primary key (source, name)
 );
 ```
 
 不复用 `plugin_kv`。`plugin_kv` 是插件私有存储，`plugin_states` 是系统管理状态。
+
+迁移落地规则：
+
+- 新增 `mini_agent/db/migrations/002_plugin_states.sql`，不要修改 `001_init.sql`。
+- 现有迁移器按文件名记录版本，新增迁移文件后旧数据库再次启动时会自动补建表。
+- 测试需要覆盖：只执行过 `001_init` 的旧数据库再次运行迁移后存在 `plugin_states`，
+  且 `schema_migrations` 记录 `002_plugin_states`。
+- `updated_at` 在 `insert` 和 `update` 状态时都由写入逻辑显式设置为当前时间，
+  不能依赖 SQLite 默认值在 update 时自动变化。
 
 启动兼容策略：
 
@@ -301,14 +347,23 @@ create table if not exists plugin_states (
 - 禁用插件后工具被反注册。
 - 禁用插件后事件订阅被移除。
 - `teardown` 被调用，且报错隔离。
+- `setup` 注册部分工具后抛错时，本次工具和事件订阅被回滚。
 - locked 插件不可禁用。
 - 插件加载失败记录 `last_error`，不拖垮运行时。
+- 同名内置插件和 workspace 插件状态互不覆盖。
+- `reload` 后可以加载更新后的插件代码。
+- runtime Dashboard 由 `AppRuntime._start_dashboard()` 注入 `self.plugins`，`/api/plugins`
+  返回 `mode=runtime`。
+- standalone Dashboard 能发现内置和 workspace 插件，但操作返回 `requires_restart=true`。
+- 旧数据库迁移后创建 `plugin_states` 并记录 `002_plugin_states`。
 
 前端测试：
 
 - `npm run build` 通过。
 - 插件页渲染中文状态、错误和操作按钮。
 - 登录态 cookie 下请求 API 正常。
+- Vue 构建产物缺失时，Python 后端返回中文提示，不返回英文 404。
+- Vue 构建产物存在时，Python 后端能服务静态资源和前端入口。
 
 集成验证：
 
