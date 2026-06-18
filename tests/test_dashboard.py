@@ -156,7 +156,7 @@ def test_dashboard_lists_events_proactive_items_and_drift_runs(tmp_path):
     ]
 
 
-def test_dashboard_index_renders_operational_ui(tmp_path):
+def test_dashboard_index_returns_chinese_missing_vue_build_fallback(tmp_path):
     from mini_agent.dashboard.server import create_dashboard_app
 
     client = TestClient(create_dashboard_app(workspace=tmp_path))
@@ -166,32 +166,48 @@ def test_dashboard_index_renders_operational_ui(tmp_path):
     assert response.status_code == 200
     html = response.text
     assert "小助手控制台" in html
-    assert "记忆文件" in html
-    assert "运行状态" in html
-    assert "最近会话" in html
-    assert "运行事件" in html
-    assert "主动推送" in html
-    assert "漂移任务" in html
+    assert "控制台前端尚未构建" in html
+    assert "dashboard-ui" in html
+    assert "npm run build" in html
     assert "Mini Agent Dashboard" not in html
-    assert "Memory Files" not in html
-    assert "Refresh" not in html
-    assert 'id="runtime-status"' in html
-    assert 'id="workspace-path"' in html
-    assert 'id="memory-files"' in html
-    assert 'id="memory-editor"' in html
-    assert 'id="session-list"' in html
-    assert 'id="event-list"' in html
-    assert 'id="proactive-list"' in html
-    assert 'id="drift-list"' in html
-    assert 'fetchJson("/api/status")' in html
-    assert 'fetchJson("/api/memory/files")' in html
-    assert 'fetchJson("/api/sessions")' in html
-    assert 'fetchJson("/api/events")' in html
-    assert 'fetchJson("/api/proactive")' in html
-    assert 'fetchJson("/api/drift")' in html
-    assert "请求失败（HTTP " in html
-    assert "response.statusText" not in html
-    assert len(html) > 5000
+
+
+def test_dashboard_serves_vue_dist_index_when_built(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    dist = tmp_path / "dashboard-ui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><html><body><div id="app">Vue 控制台</div></body></html>',
+        encoding="utf-8",
+    )
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path, static_dir=dist))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Vue 控制台" in response.text
+
+
+def test_dashboard_serves_vue_dist_assets_when_built(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    dist = tmp_path / "dashboard-ui" / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><script type="module" src="/assets/app.js"></script>',
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("console.log('控制台资源');", encoding="utf-8")
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path, static_dir=dist))
+
+    response = client.get("/assets/app.js")
+
+    assert response.status_code == 200
+    assert "控制台资源" in response.text
 
 
 def test_dashboard_token_protects_api_when_configured(tmp_path):
