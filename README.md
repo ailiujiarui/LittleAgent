@@ -4,7 +4,7 @@
 
 Minimal Akashic-inspired agent with direct OneBot v11 QQ entry, session workers,
 OpenAI-compatible tool calling, Markdown/SQLite memory, plugins, proactive push,
-Drift, dashboard APIs, and stdio MCP tool import.
+Drift, a Vue dashboard served by Python, and stdio MCP tool import.
 
 ## Quick Start
 
@@ -12,6 +12,21 @@ Drift, dashboard APIs, and stdio MCP tool import.
 py -m mini_agent init --workspace workspace
 py -m mini_agent run --dry-run --workspace workspace
 ```
+
+## Dashboard
+
+The dashboard frontend lives in `dashboard-ui/` and is served as static files by
+the Python FastAPI dashboard after build:
+
+```bash
+cd dashboard-ui
+npm install
+npm run build
+```
+
+The dashboard can run standalone or with the agent. In runtime mode it can enable,
+disable, and reload plugins immediately; in standalone mode it only updates the
+SQLite plugin state for the next agent start.
 
 ## DeepSeek
 
