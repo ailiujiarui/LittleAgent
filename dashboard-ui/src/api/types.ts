@@ -83,3 +83,29 @@ export interface DriftRun {
 export interface DriftResponse {
   runs: DriftRun[];
 }
+
+export interface PluginRecord {
+  id: string;
+  source: string;
+  name: string;
+  enabled: boolean;
+  loaded: boolean;
+  locked: boolean;
+  tool_count: number;
+  event_count: number;
+  last_error: string;
+  updated_at: string;
+  requires_restart: boolean;
+}
+
+export interface PluginListResponse {
+  mode: "runtime" | "standalone";
+  plugins: PluginRecord[];
+}
+
+export interface PluginActionResponse {
+  ok: boolean;
+  plugin: PluginRecord;
+  requires_restart: boolean;
+  message: string;
+}

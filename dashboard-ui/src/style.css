@@ -242,6 +242,10 @@ code {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.plugin-metrics {
+  margin-bottom: 18px;
+}
+
 .metric-panel,
 .empty-panel {
   background: var(--surface);
@@ -357,8 +361,103 @@ code {
 }
 
 .table-panel,
-.list-panel {
+.list-panel,
+.plugin-list {
   display: grid;
+}
+
+.plugin-list {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.plugin-row {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.plugin-row:first-child {
+  border-top: 0;
+}
+
+.plugin-main,
+.plugin-meta,
+.plugin-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.plugin-main {
+  justify-content: space-between;
+}
+
+.plugin-main > div {
+  display: grid;
+  gap: 4px;
+  min-width: min(320px, 100%);
+}
+
+.plugin-main strong {
+  font-size: 16px;
+}
+
+.plugin-main span,
+.plugin-meta span {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.source-chip,
+.plugin-status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-weight: 700;
+  min-height: 28px;
+  padding: 5px 10px;
+}
+
+.source-chip {
+  background: var(--surface-2);
+}
+
+.plugin-status.ok {
+  background: #e8f5ed;
+  border-color: #b7dec5;
+  color: var(--ok);
+}
+
+.plugin-status.warn {
+  background: #fff7ed;
+  border-color: #f4c78d;
+  color: var(--warn);
+}
+
+.plugin-status.bad {
+  background: #fff7f6;
+  border-color: #f2b8b5;
+  color: var(--bad);
+}
+
+.plugin-status.neutral {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.plugin-error {
+  background: #fff7f6;
+  border: 1px solid #f2b8b5;
+  border-radius: 8px;
+  color: var(--bad);
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px 12px;
 }
 
 .table-row {
@@ -416,6 +515,15 @@ code {
   background: #fff7f6;
   border: 1px solid #f2b8b5;
   border-radius: 8px;
+  margin-top: 18px;
+  padding: 12px 14px;
+}
+
+.success-line {
+  background: #f0fbf5;
+  border: 1px solid #b7dec5;
+  border-radius: 8px;
+  color: var(--ok);
   margin-top: 18px;
   padding: 12px 14px;
 }
