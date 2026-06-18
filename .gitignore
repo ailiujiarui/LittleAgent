@@ -8,6 +8,9 @@ workspace/
 config.toml
 logs/
 mini_agent.egg-info/
+dashboard-ui/dist/
+dashboard-ui/node_modules/
+dashboard-ui/.vite/
 *.db
 *.db-shm
 *.db-wal

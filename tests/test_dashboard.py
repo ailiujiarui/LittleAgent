@@ -168,7 +168,9 @@ def test_dashboard_lists_events_proactive_items_and_drift_runs(tmp_path):
 def test_dashboard_index_returns_chinese_missing_vue_build_fallback(tmp_path):
     from mini_agent.dashboard.server import create_dashboard_app
 
-    client = TestClient(create_dashboard_app(workspace=tmp_path))
+    client = TestClient(
+        create_dashboard_app(workspace=tmp_path, static_dir=tmp_path / "missing-dist")
+    )
 
     response = client.get("/")
 
