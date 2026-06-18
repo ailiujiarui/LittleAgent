@@ -117,7 +117,7 @@ def test_apply_migrations_is_idempotent(tmp_path):
             ).fetchall()
         }
 
-    assert migrations == [("001_init",)]
+    assert migrations == [("001_init",), ("002_plugin_states",)]
     assert {
         "sessions",
         "messages",
@@ -127,4 +127,34 @@ def test_apply_migrations_is_idempotent(tmp_path):
         "proactive_items",
         "drift_runs",
         "plugin_kv",
+        "plugin_states",
     }.issubset(tables)
+
+
+def test_apply_migrations_adds_plugin_states_to_existing_database(tmp_path):
+    from mini_agent.db.migrations import apply_migrations
+
+    db_path = tmp_path / "agent.db"
+    apply_migrations(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("drop table if exists plugin_states")
+        conn.execute("delete from schema_migrations where version = '002_plugin_states'")
+        conn.commit()
+
+    apply_migrations(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "select name from sqlite_master where type = 'table'"
+            ).fetchall()
+        }
+        versions = {
+            row[0]
+            for row in conn.execute("select version from schema_migrations").fetchall()
+        }
+
+    assert "plugin_states" in tables
+    assert "002_plugin_states" in versions

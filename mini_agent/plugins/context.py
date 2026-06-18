@@ -1,7 +1,8 @@
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from mini_agent.db.migrations import apply_migrations
 from mini_agent.tools.base import Tool
@@ -9,6 +10,12 @@ from mini_agent.tools.registry import ToolRegistry
 
 
 EventHandler = Callable[[Dict[str, Any]], Awaitable[None]]
+
+
+@dataclass
+class PluginRegistrationTracker:
+    registered_tools: List[str] = field(default_factory=list)
+    subscribed_events: List[Tuple[str, EventHandler]] = field(default_factory=list)
 
 
 class PluginKVStore:
@@ -53,22 +60,34 @@ class PluginContext:
         tools: ToolRegistry,
         kv_store: PluginKVStore,
         event_handlers: Dict[str, List[EventHandler]],
+        plugin_id: Optional[str] = None,
+        tracker: Optional[PluginRegistrationTracker] = None,
     ) -> None:
         self.name = name
+        self.plugin_id = plugin_id or name
         self.workspace = Path(workspace)
         self.plugin_dir = Path(plugin_dir)
         self.tools = tools
         self.kv_store = kv_store
         self._event_handlers = event_handlers
+        self._tracker = tracker
 
     def register_tool(self, tool: Tool) -> None:
-        self.tools.register(tool, source_type="plugin", source_name=self.name)
+        self.tools.register(
+            tool,
+            source_type="plugin",
+            source_name=self.plugin_id,
+        )
+        if self._tracker is not None:
+            self._tracker.registered_tools.append(tool.name)
 
     def subscribe(self, event_name: str, handler: EventHandler) -> None:
         self._event_handlers.setdefault(event_name, []).append(handler)
+        if self._tracker is not None:
+            self._tracker.subscribed_events.append((event_name, handler))
 
     def kv_set(self, key: str, value: Any) -> None:
-        self.kv_store.set(self.name, key, value)
+        self.kv_store.set(self.plugin_id, key, value)
 
     def kv_get(self, key: str, default: Any = None) -> Any:
-        return self.kv_store.get(self.name, key, default)
+        return self.kv_store.get(self.plugin_id, key, default)
