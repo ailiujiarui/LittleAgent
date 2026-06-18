@@ -2,6 +2,14 @@
 import { computed, onMounted, ref } from "vue";
 import { getJson } from "./api/client";
 import type { DashboardStatus } from "./api/types";
+import AppShell from "./components/AppShell.vue";
+import DriftView from "./views/DriftView.vue";
+import EventsView from "./views/EventsView.vue";
+import MemoryView from "./views/MemoryView.vue";
+import OverviewView from "./views/OverviewView.vue";
+import PluginsView from "./views/PluginsView.vue";
+import ProactiveView from "./views/ProactiveView.vue";
+import SessionsView from "./views/SessionsView.vue";
 
 const navItems = [
   "总览",
@@ -18,11 +26,18 @@ const status = ref<DashboardStatus | null>(null);
 const loading = ref(false);
 const error = ref("");
 
-const runtimeLabel = computed(() => {
+const workspace = computed(() => status.value?.workspace || "工作区读取中");
+const statusLabel = computed(() => {
   if (!status.value) {
     return "检查中";
   }
   return status.value.running ? "运行中" : "控制台在线";
+});
+const statusTone = computed(() => {
+  if (error.value) {
+    return "bad";
+  }
+  return status.value?.running ? "ok" : "warn";
 });
 
 async function refreshStatus() {
@@ -41,62 +56,21 @@ onMounted(refreshStatus);
 </script>
 
 <template>
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand">
-        <h1>小助手控制台</h1>
-        <p>{{ status?.workspace || "工作区读取中" }}</p>
-      </div>
-      <div class="topbar-actions">
-        <span class="status-pill" :class="{ online: Boolean(status) }">
-          {{ runtimeLabel }}
-        </span>
-        <button type="button" class="icon-text-button" @click="refreshStatus">
-          {{ loading ? "刷新中" : "刷新" }}
-        </button>
-      </div>
-    </header>
-
-    <div class="layout">
-      <aside class="sidebar" aria-label="主导航">
-        <button
-          v-for="item in navItems"
-          :key="item"
-          type="button"
-          class="nav-button"
-          :class="{ active: activeView === item }"
-          @click="activeView = item"
-        >
-          {{ item }}
-        </button>
-      </aside>
-
-      <main class="content">
-        <section class="page-head">
-          <div>
-            <h2>{{ activeView }}</h2>
-            <p>{{ status?.workspace || "暂无工作区信息" }}</p>
-          </div>
-          <span class="view-chip">Vue 控制台</span>
-        </section>
-
-        <section class="overview-grid">
-          <div class="metric-panel">
-            <span>运行状态</span>
-            <strong>{{ runtimeLabel }}</strong>
-          </div>
-          <div class="metric-panel">
-            <span>插件</span>
-            <strong>待载入</strong>
-          </div>
-          <div class="metric-panel">
-            <span>记忆</span>
-            <strong>待载入</strong>
-          </div>
-        </section>
-
-        <p v-if="error" class="error-line">{{ error }}</p>
-      </main>
-    </div>
-  </div>
+  <AppShell
+    v-model:active-view="activeView"
+    :nav-items="navItems"
+    :workspace="workspace"
+    :status-label="statusLabel"
+    :status-tone="statusTone"
+    :loading="loading"
+    @refresh="refreshStatus"
+  >
+    <OverviewView v-if="activeView === '总览'" :status="status" :error="error" />
+    <MemoryView v-else-if="activeView === '记忆'" />
+    <PluginsView v-else-if="activeView === '插件'" />
+    <SessionsView v-else-if="activeView === '会话'" />
+    <EventsView v-else-if="activeView === '运行事件'" />
+    <ProactiveView v-else-if="activeView === '主动推送'" />
+    <DriftView v-else />
+  </AppShell>
 </template>
