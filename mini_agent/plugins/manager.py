@@ -6,7 +6,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, Field
 
-from mini_agent.plugins.context import EventHandler, PluginContext, PluginKVStore
+from mini_agent.plugins.context import (
+    EventHandler,
+    PluginContext,
+    PluginKVStore,
+    PluginRegistrationTracker,
+)
 from mini_agent.tools.registry import ToolRegistry
 
 
@@ -27,6 +32,8 @@ class PluginManager:
         self.tools = tools
         self.kv_store = PluginKVStore(self.workspace / "agent.db")
         self._event_handlers: Dict[str, List[EventHandler]] = {}
+        self._plugin_ids_by_name: Dict[str, List[str]] = {}
+        self._trackers: Dict[str, PluginRegistrationTracker] = {}
         self.builtin_plugins = dict(builtin_plugins or {})
 
     def discover(self) -> List[Path]:
@@ -41,7 +48,7 @@ class PluginManager:
     def load_all(self) -> PluginLoadResult:
         result = PluginLoadResult()
         for name, setup in sorted(self.builtin_plugins.items()):
-            self._load_plugin(name, setup, result)
+            self._load_plugin(name, setup, result, source="builtin")
 
         for plugin_file in self.discover():
             name = plugin_file.parent.name
@@ -51,7 +58,13 @@ class PluginManager:
             except Exception as exc:  # noqa: BLE001 - one bad plugin must not stop startup.
                 result.failed[name] = str(exc)
                 continue
-            self._load_plugin(name, setup, result, plugin_dir=plugin_file.parent)
+            self._load_plugin(
+                name,
+                setup,
+                result,
+                source="workspace",
+                plugin_dir=plugin_file.parent,
+            )
         return result
 
     def _load_plugin(
@@ -59,21 +72,28 @@ class PluginManager:
         name: str,
         setup: Callable[[PluginContext], None],
         result: PluginLoadResult,
+        source: str,
         plugin_dir: Optional[Path] = None,
     ) -> None:
+        plugin_id = f"{source}:{name}"
+        tracker = PluginRegistrationTracker()
         try:
             ctx = PluginContext(
                 name=name,
+                plugin_id=plugin_id,
                 workspace=self.workspace,
                 plugin_dir=plugin_dir or self.plugins_dir / name,
                 tools=self.tools,
                 kv_store=self.kv_store,
                 event_handlers=self._event_handlers,
+                tracker=tracker,
             )
             setup(ctx)
         except Exception as exc:  # noqa: BLE001 - one bad plugin must not stop startup.
             result.failed[name] = str(exc)
             return
+        self._trackers[plugin_id] = tracker
+        self._plugin_ids_by_name.setdefault(name, []).append(plugin_id)
         result.loaded.append(name)
 
     async def emit(self, event_name: str, event: Dict[str, Any]) -> None:
@@ -86,7 +106,19 @@ class PluginManager:
                 continue
 
     def kv_get(self, plugin_name: str, key: str, default: Any = None) -> Any:
-        return self.kv_store.get(plugin_name, key, default)
+        return self.kv_store.get(
+            self._resolve_plugin_id(plugin_name),
+            key,
+            default,
+        )
+
+    def _resolve_plugin_id(self, plugin_name: str) -> str:
+        if ":" in plugin_name:
+            return plugin_name
+        plugin_ids = self._plugin_ids_by_name.get(plugin_name, [])
+        if len(plugin_ids) == 1:
+            return plugin_ids[0]
+        return plugin_name
 
 
 def _load_module(name: str, plugin_file: Path) -> ModuleType:

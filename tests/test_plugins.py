@@ -3,6 +3,7 @@ import sqlite3
 import textwrap
 
 import pytest
+from pydantic import BaseModel
 
 
 def _write_plugin(root, name, source):
@@ -105,10 +106,6 @@ def test_plugin_state_writes_touch_updated_at_and_fields(tmp_path):
     assert failed.updated_at != "2000-01-01 00:00:00"
 
 
-@pytest.mark.xfail(
-    reason="Task3 adds PluginContext plugin_id support for source-aware KV isolation.",
-    strict=True,
-)
 def test_plugin_context_kv_uses_stable_plugin_id_for_same_name_sources(tmp_path):
     from mini_agent.plugins.context import PluginContext, PluginKVStore
     from mini_agent.tools.registry import ToolRegistry
@@ -150,6 +147,70 @@ def test_plugin_context_kv_uses_stable_plugin_id_for_same_name_sources(tmp_path)
         }
 
     assert plugin_names == {"builtin:echo", "workspace:echo"}
+
+
+def test_plugin_catalog_discovers_builtin_and_workspace_plugins(tmp_path):
+    from mini_agent.plugins.catalog import PluginCatalog, builtin_plugin_specs
+
+    _write_plugin(tmp_path, "demo", "def setup(ctx): pass")
+
+    catalog = PluginCatalog(tmp_path, builtin_plugin_specs())
+    plugins = catalog.discover()
+    identities = {(plugin.source, plugin.name, plugin.id) for plugin in plugins}
+
+    assert ("builtin", "group_messages", "builtin:group_messages") in identities
+    assert ("builtin", "xiaohongshu_search", "builtin:xiaohongshu_search") in identities
+    assert ("workspace", "demo", "workspace:demo") in identities
+    assert {
+        (plugin.source, plugin.name): plugin.default_enabled for plugin in plugins
+    }[("builtin", "group_messages")] is True
+    assert {
+        (plugin.source, plugin.name): plugin.default_enabled for plugin in plugins
+    }[("workspace", "demo")] is False
+
+
+def test_plugin_context_tracks_tools_events_and_uses_plugin_id_for_kv(tmp_path):
+    from mini_agent.plugins.context import (
+        PluginContext,
+        PluginKVStore,
+        PluginRegistrationTracker,
+    )
+    from mini_agent.tools.base import Tool
+    from mini_agent.tools.registry import ToolRegistry
+
+    class NoArgs(BaseModel):
+        pass
+
+    async def ok(args):
+        return {"ok": True}
+
+    registry = ToolRegistry()
+    handlers = {}
+    tracker = PluginRegistrationTracker()
+    kv_store = PluginKVStore(tmp_path / "agent.db")
+    ctx = PluginContext(
+        name="echo",
+        plugin_id="workspace:echo",
+        workspace=tmp_path,
+        plugin_dir=tmp_path / "plugins" / "echo",
+        tools=registry,
+        kv_store=kv_store,
+        event_handlers=handlers,
+        tracker=tracker,
+    )
+
+    async def on_event(event):
+        return None
+
+    ctx.register_tool(Tool("tracked_tool", "Tracked", NoArgs, ok))
+    ctx.subscribe("turn_finished", on_event)
+    ctx.kv_set("private", "workspace value")
+
+    assert tracker.registered_tools == ["tracked_tool"]
+    assert tracker.subscribed_events == [("turn_finished", on_event)]
+    assert registry.unregister_source("plugin", "workspace:echo") == ["tracked_tool"]
+    assert handlers["turn_finished"] == [on_event]
+    assert ctx.kv_get("private") == "workspace value"
 
 
 def test_plugin_manager_discovers_and_calls_setup_registering_tool(tmp_path):
