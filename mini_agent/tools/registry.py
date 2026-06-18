@@ -6,10 +6,24 @@ from mini_agent.tools.base import Tool, ToolResult
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, Tool] = {}
+        self._metadata: Dict[str, Dict[str, Any]] = {}
         self._context: Dict[str, Any] = {}
 
     def register(self, tool: Tool, **metadata: Any) -> None:
         self._tools[tool.name] = tool
+        self._metadata[tool.name] = dict(metadata)
+
+    def unregister_source(self, source_type: str, source_name: str) -> List[str]:
+        removed: List[str] = []
+        for name, metadata in list(self._metadata.items()):
+            if (
+                metadata.get("source_type") == source_type
+                and metadata.get("source_name") == source_name
+            ):
+                self._tools.pop(name, None)
+                self._metadata.pop(name, None)
+                removed.append(name)
+        return sorted(removed)
 
     def set_context(self, context: Dict[str, Any]) -> None:
         self._context = dict(context)

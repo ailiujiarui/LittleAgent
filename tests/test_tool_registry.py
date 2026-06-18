@@ -147,3 +147,39 @@ def test_registry_exposes_akashic_compatible_helpers_and_context_merge():
         assert result.content == {"route": "qq:123", "text": "hello"}
 
     asyncio.run(scenario())
+
+
+def test_tool_registry_unregisters_tools_by_source():
+    from mini_agent.tools.base import Tool
+    from mini_agent.tools.registry import ToolRegistry
+
+    class NoArgs(BaseModel):
+        pass
+
+    async def ok(args):
+        return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool("plugin_a", "Plugin A", NoArgs, ok),
+        source_type="plugin",
+        source_name="workspace:demo",
+    )
+    registry.register(
+        Tool("plugin_b", "Plugin B", NoArgs, ok),
+        source_type="plugin",
+        source_name="workspace:other",
+    )
+    registry.register(
+        Tool("builtin", "Builtin", NoArgs, ok),
+        source_type="builtin",
+        source_name="core",
+    )
+
+    removed = registry.unregister_source("plugin", "workspace:demo")
+
+    assert removed == ["plugin_a"]
+    assert registry.has_tool("plugin_a") is False
+    assert registry.has_tool("plugin_b") is True
+    assert registry.has_tool("builtin") is True
+    assert registry.get_registered_names() == ["builtin", "plugin_b"]
