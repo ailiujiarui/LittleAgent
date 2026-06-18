@@ -1,4 +1,13 @@
+import textwrap
+
 from fastapi.testclient import TestClient
+
+
+def _write_plugin(root, name, source):
+    plugin_dir = root / "plugins" / name
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.py").write_text(textwrap.dedent(source), encoding="utf-8")
+    return plugin_dir
 
 
 def test_dashboard_lists_sessions_and_messages(tmp_path):
@@ -208,6 +217,141 @@ def test_dashboard_serves_vue_dist_assets_when_built(tmp_path):
 
     assert response.status_code == 200
     assert "控制台资源" in response.text
+
+
+def test_dashboard_plugin_api_lists_standalone_plugins_and_requires_auth(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+
+    _write_plugin(
+        tmp_path,
+        "demo",
+        """
+        def setup(ctx):
+            (ctx.workspace / "setup-ran.txt").write_text("yes", encoding="utf-8")
+        """,
+    )
+
+    protected = TestClient(
+        create_dashboard_app(workspace=tmp_path, access_token="secret")
+    )
+    assert protected.get("/api/plugins").status_code == 401
+    assert (
+        protected.get(
+            "/api/plugins",
+            headers={"Authorization": "Bearer secret"},
+        ).status_code
+        == 200
+    )
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path))
+    payload = client.get("/api/plugins").json()
+    plugins = {plugin["id"]: plugin for plugin in payload["plugins"]}
+
+    assert payload["mode"] == "standalone"
+    assert "builtin:group_messages" in plugins
+    assert "builtin:xiaohongshu_search" in plugins
+    assert plugins["workspace:demo"]["enabled"] is False
+    assert plugins["workspace:demo"]["loaded"] is False
+    assert not (tmp_path / "setup-ran.txt").exists()
+
+
+def test_dashboard_plugin_api_standalone_enable_persists_for_next_start(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+    from mini_agent.plugins.state import PluginStateStore
+
+    _write_plugin(
+        tmp_path,
+        "demo",
+        """
+        def setup(ctx):
+            (ctx.workspace / "setup-ran.txt").write_text("yes", encoding="utf-8")
+        """,
+    )
+
+    client = TestClient(create_dashboard_app(workspace=tmp_path))
+
+    response = client.post("/api/plugins/workspace/demo/enable")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["requires_restart"] is True
+    assert "下次启动后生效" in payload["message"]
+    assert payload["plugin"]["enabled"] is True
+    state = PluginStateStore(tmp_path / "agent.db").get("workspace", "demo")
+    assert state.enabled is True
+    assert not (tmp_path / "setup-ran.txt").exists()
+
+
+def test_dashboard_plugin_api_runtime_enable_disable_reload_hotplugs(tmp_path):
+    from mini_agent.dashboard.server import create_dashboard_app
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    plugin_dir = _write_plugin(
+        tmp_path,
+        "demo",
+        """
+        from pydantic import BaseModel
+        from mini_agent.tools.base import Tool
+
+        class NoArgs(BaseModel):
+            pass
+
+        def setup(ctx):
+            ctx.kv_set("version", "one")
+            ctx.register_tool(
+                Tool("dashboard_demo_v1", "Demo v1", NoArgs, lambda args: {"version": "one"})
+            )
+
+        def teardown(ctx):
+            ctx.kv_set("torn_down", "yes")
+        """,
+    )
+    registry = ToolRegistry()
+    manager = PluginManager(workspace=tmp_path, tools=registry)
+    client = TestClient(create_dashboard_app(workspace=tmp_path, plugin_manager=manager))
+
+    listed = client.get("/api/plugins").json()
+    assert listed["mode"] == "runtime"
+
+    enabled = client.post("/api/plugins/workspace/demo/enable").json()
+    assert enabled["ok"] is True
+    assert enabled["requires_restart"] is False
+    assert registry.has_tool("dashboard_demo_v1") is True
+
+    disabled = client.post("/api/plugins/workspace/demo/disable").json()
+    assert disabled["ok"] is True
+    assert disabled["plugin"]["enabled"] is False
+    assert registry.has_tool("dashboard_demo_v1") is False
+
+    client.post("/api/plugins/workspace/demo/enable")
+    (plugin_dir / "plugin.py").write_text(
+        textwrap.dedent(
+            """
+            from pydantic import BaseModel
+            from mini_agent.tools.base import Tool
+
+            class NoArgs(BaseModel):
+                pass
+
+            def setup(ctx):
+                ctx.kv_set("version", "two")
+                ctx.register_tool(
+                    Tool("dashboard_demo_v2", "Demo v2", NoArgs, lambda args: {"version": "two"})
+                )
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    reloaded = client.post("/api/plugins/workspace/demo/reload").json()
+
+    assert reloaded["ok"] is True
+    assert registry.has_tool("dashboard_demo_v1") is False
+    assert registry.has_tool("dashboard_demo_v2") is True
+    assert manager.kv_get("workspace:demo", "torn_down") == "yes"
+    assert manager.kv_get("workspace:demo", "version") == "two"
 
 
 def test_dashboard_token_protects_api_when_configured(tmp_path):

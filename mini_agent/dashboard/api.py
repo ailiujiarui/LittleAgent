@@ -8,6 +8,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from mini_agent.memory.store import WRITABLE_MEMORY_FILES, MemoryStore
+from mini_agent.plugins.catalog import PluginCatalog, PluginSpec, builtin_plugin_specs
+from mini_agent.plugins.manager import PluginActionResult, PluginManager, PluginSummary
+from mini_agent.plugins.state import PluginState, PluginStateStore
 
 
 AuthDependency = Callable[[Request], None]
@@ -22,10 +25,8 @@ def register_dashboard_api(
     workspace: Path,
     status: Optional[Dict[str, object]],
     require_auth: AuthDependency,
-    plugin_manager: Optional[object] = None,
+    plugin_manager: Optional[PluginManager] = None,
 ) -> None:
-    del plugin_manager
-
     workspace = Path(workspace)
     memory = MemoryStore(workspace)
     db_path = workspace / "agent.db"
@@ -35,6 +36,47 @@ def register_dashboard_api(
     @app.get("/api/status", dependencies=auth_dependency)
     def get_status():
         return {"workspace": str(workspace), **runtime_status}
+
+    @app.get("/api/plugins", dependencies=auth_dependency)
+    def list_plugins():
+        if plugin_manager is not None:
+            return {
+                "mode": "runtime",
+                "plugins": [
+                    plugin.model_dump() for plugin in plugin_manager.list_plugins()
+                ],
+            }
+        return {
+            "mode": "standalone",
+            "plugins": [
+                plugin.model_dump()
+                for plugin in _list_standalone_plugins(workspace)
+            ],
+        }
+
+    @app.post("/api/plugins/{source}/{name}/enable", dependencies=auth_dependency)
+    async def enable_plugin(source: str, name: str):
+        if plugin_manager is not None:
+            return _handle_runtime_action_result(
+                await plugin_manager.enable(source, name)
+            )
+        return _standalone_action(workspace, source, name, "enable")
+
+    @app.post("/api/plugins/{source}/{name}/disable", dependencies=auth_dependency)
+    async def disable_plugin(source: str, name: str):
+        if plugin_manager is not None:
+            return _handle_runtime_action_result(
+                await plugin_manager.disable(source, name)
+            )
+        return _standalone_action(workspace, source, name, "disable")
+
+    @app.post("/api/plugins/{source}/{name}/reload", dependencies=auth_dependency)
+    async def reload_plugin(source: str, name: str):
+        if plugin_manager is not None:
+            return _handle_runtime_action_result(
+                await plugin_manager.reload(source, name)
+            )
+        return _standalone_action(workspace, source, name, "reload")
 
     @app.get("/api/memory/files", dependencies=auth_dependency)
     def list_memory_files():
@@ -267,3 +309,91 @@ def _parse_json(text: str) -> Any:
         return json.loads(text or "{}")
     except json.JSONDecodeError:
         return {"raw": text}
+
+
+def _list_standalone_plugins(workspace: Path) -> List[PluginSummary]:
+    store = PluginStateStore(workspace / "agent.db")
+    plugins = []
+    for spec in _standalone_specs(workspace):
+        state = store.ensure(
+            spec.source,
+            spec.name,
+            default_enabled=spec.default_enabled,
+            locked=spec.locked,
+        )
+        plugins.append(_standalone_summary(spec, state))
+    return plugins
+
+
+def _standalone_action(
+    workspace: Path,
+    source: str,
+    name: str,
+    action: str,
+) -> PluginActionResult:
+    spec = _find_standalone_spec(workspace, source, name)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+
+    store = PluginStateStore(workspace / "agent.db")
+    state = store.ensure(
+        source,
+        name,
+        default_enabled=spec.default_enabled,
+        locked=spec.locked,
+    )
+    if action == "disable":
+        if state.locked or spec.locked:
+            raise HTTPException(status_code=400, detail="系统插件不可关闭")
+        state = store.set_enabled(source, name, False)
+    elif action == "enable":
+        state = store.set_enabled(source, name, True)
+    elif action == "reload":
+        state = store.get(source, name) or state
+    else:
+        raise HTTPException(status_code=400, detail="不支持的插件操作")
+
+    return PluginActionResult(
+        ok=True,
+        plugin=_standalone_summary(spec, state),
+        requires_restart=True,
+        message="已保存，Agent 下次启动后生效",
+    )
+
+
+def _handle_runtime_action_result(result: PluginActionResult) -> PluginActionResult:
+    if result.message == "插件不存在":
+        raise HTTPException(status_code=404, detail="插件不存在")
+    if not result.ok and result.message == "系统插件不可关闭":
+        raise HTTPException(status_code=400, detail="系统插件不可关闭")
+    return result
+
+
+def _standalone_specs(workspace: Path) -> List[PluginSpec]:
+    return list(PluginCatalog(workspace, builtin_plugin_specs()).discover())
+
+
+def _find_standalone_spec(
+    workspace: Path,
+    source: str,
+    name: str,
+) -> Optional[PluginSpec]:
+    for spec in _standalone_specs(workspace):
+        if spec.source == source and spec.name == name:
+            return spec
+    return None
+
+
+def _standalone_summary(spec: PluginSpec, state: PluginState) -> PluginSummary:
+    return PluginSummary(
+        id=spec.id,
+        source=spec.source,
+        name=spec.name,
+        enabled=state.enabled,
+        loaded=False,
+        locked=state.locked or spec.locked,
+        tool_count=0,
+        event_count=0,
+        last_error=state.last_error,
+        updated_at=state.updated_at,
+    )

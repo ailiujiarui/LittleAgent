@@ -264,10 +264,16 @@ def test_app_runtime_passes_dashboard_access_token(monkeypatch, tmp_path):
     async def scenario():
         captured = {}
 
-        def fake_create_dashboard_app(workspace, status=None, access_token=None):
+        def fake_create_dashboard_app(
+            workspace,
+            status=None,
+            access_token=None,
+            plugin_manager=None,
+        ):
             captured["workspace"] = workspace
             captured["status"] = status
             captured["access_token"] = access_token
+            captured["plugin_manager"] = plugin_manager
             return object()
 
         class FakeConfig:
@@ -307,6 +313,7 @@ def test_app_runtime_passes_dashboard_access_token(monkeypatch, tmp_path):
         await runtime.stop_runtime_services()
 
         assert captured["access_token"] == "secret"
+        assert captured["plugin_manager"] is runtime.plugins
         assert captured["host"] == "127.0.0.1"
         assert captured["port"] == 9898
 
