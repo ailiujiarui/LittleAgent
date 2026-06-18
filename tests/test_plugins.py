@@ -238,11 +238,11 @@ def test_plugin_manager_discovers_and_calls_setup_registering_tool(tmp_path):
     async def scenario():
         registry = ToolRegistry()
         manager = PluginManager(workspace=tmp_path, tools=registry)
-        result = manager.load_all()
+        result = await manager.enable("workspace", "echo_plugin")
         executed = await registry.execute("plugin_echo", {"text": "hello"})
 
-        assert result.loaded == ["echo_plugin"]
-        assert result.failed == {}
+        assert result.ok is True
+        assert result.plugin.loaded is True
         assert executed.content == {"text": "hello"}
 
     asyncio.run(scenario())
@@ -265,7 +265,7 @@ def test_plugin_event_handler_receives_event_and_can_use_kv(tmp_path):
 
     async def scenario():
         manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
-        manager.load_all()
+        await manager.enable("workspace", "observer")
 
         await manager.emit("turn_finished", {"text": "done"})
 
@@ -304,12 +304,248 @@ def test_setup_failure_disables_only_that_plugin(tmp_path):
         """,
     )
 
-    manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
-    result = manager.load_all()
+    async def scenario():
+        manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
+        bad = await manager.enable("workspace", "bad")
+        good = await manager.enable("workspace", "good")
 
-    assert result.loaded == ["good"]
-    assert "bad" in result.failed
-    assert manager.tools.has_tool("good_tool") is True
+        assert bad.ok is False
+        assert bad.plugin.loaded is False
+        assert "broken" in bad.plugin.last_error
+        assert good.ok is True
+        assert good.plugin.loaded is True
+        assert manager.tools.has_tool("good_tool") is True
+
+    asyncio.run(scenario())
+
+
+def test_plugin_manager_loads_enabled_builtin_and_skips_new_workspace_plugin(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    _write_plugin(
+        tmp_path,
+        "workspace_tool",
+        """
+        from pydantic import BaseModel
+        from mini_agent.tools.base import Tool
+
+        class NoArgs(BaseModel):
+            pass
+
+        def setup(ctx):
+            ctx.register_tool(Tool("workspace_tool", "Workspace", NoArgs, lambda args: {}))
+        """,
+    )
+
+    manager = PluginManager(
+        workspace=tmp_path,
+        tools=ToolRegistry(),
+        builtin_plugins={"group_messages": lambda ctx: None},
+    )
+    result = manager.load_all()
+    plugins = {plugin.id: plugin for plugin in manager.list_plugins()}
+
+    assert result.loaded == ["group_messages"]
+    assert manager.tools.has_tool("workspace_tool") is False
+    assert plugins["builtin:group_messages"].enabled is True
+    assert plugins["builtin:group_messages"].loaded is True
+    assert plugins["workspace:workspace_tool"].enabled is False
+    assert plugins["workspace:workspace_tool"].loaded is False
+
+
+def test_plugin_disable_calls_teardown_and_removes_tools_and_events(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    _write_plugin(
+        tmp_path,
+        "cleanup",
+        """
+        from pydantic import BaseModel
+        from mini_agent.tools.base import Tool
+
+        class NoArgs(BaseModel):
+            pass
+
+        def setup(ctx):
+            ctx.kv_set("state", "loaded")
+            async def on_event(event):
+                ctx.kv_set("event", event["value"])
+            ctx.subscribe("turn_finished", on_event)
+            ctx.register_tool(Tool("cleanup_tool", "Cleanup", NoArgs, lambda args: {}))
+
+        def teardown(ctx):
+            ctx.kv_set("state", "torn down")
+        """,
+    )
+
+    async def scenario():
+        manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
+        await manager.enable("workspace", "cleanup")
+
+        disabled = await manager.disable("workspace", "cleanup")
+        await manager.emit("turn_finished", {"value": "ignored"})
+
+        assert disabled.ok is True
+        assert disabled.plugin.enabled is False
+        assert disabled.plugin.loaded is False
+        assert manager.tools.has_tool("cleanup_tool") is False
+        assert manager.kv_get("workspace:cleanup", "state") == "torn down"
+        assert manager.kv_get("workspace:cleanup", "event") is None
+
+    asyncio.run(scenario())
+
+
+def test_plugin_setup_failure_rolls_back_registered_tool_and_event(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    _write_plugin(
+        tmp_path,
+        "bad_partial",
+        """
+        from pydantic import BaseModel
+        from mini_agent.tools.base import Tool
+
+        class NoArgs(BaseModel):
+            pass
+
+        def setup(ctx):
+            async def on_event(event):
+                ctx.kv_set("event", "should not run")
+            ctx.subscribe("turn_finished", on_event)
+            ctx.register_tool(Tool("bad_partial_tool", "Bad", NoArgs, lambda args: {}))
+            raise RuntimeError("boom")
+        """,
+    )
+
+    async def scenario():
+        manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
+
+        result = await manager.enable("workspace", "bad_partial")
+        await manager.emit("turn_finished", {})
+
+        assert result.ok is False
+        assert result.plugin.loaded is False
+        assert "boom" in result.plugin.last_error
+        assert manager.tools.has_tool("bad_partial_tool") is False
+        assert manager.kv_get("workspace:bad_partial", "event") is None
+
+    asyncio.run(scenario())
+
+
+def test_plugin_teardown_error_is_recorded_but_cleanup_still_happens(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    _write_plugin(
+        tmp_path,
+        "bad_teardown",
+        """
+        from pydantic import BaseModel
+        from mini_agent.tools.base import Tool
+
+        class NoArgs(BaseModel):
+            pass
+
+        def setup(ctx):
+            ctx.register_tool(Tool("bad_teardown_tool", "Bad teardown", NoArgs, lambda args: {}))
+
+        def teardown(ctx):
+            raise RuntimeError("teardown boom")
+        """,
+    )
+
+    async def scenario():
+        manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
+        await manager.enable("workspace", "bad_teardown")
+
+        result = await manager.disable("workspace", "bad_teardown")
+
+        assert result.ok is True
+        assert result.plugin.loaded is False
+        assert "teardown boom" in result.plugin.last_error
+        assert manager.tools.has_tool("bad_teardown_tool") is False
+
+    asyncio.run(scenario())
+
+
+def test_plugin_reload_tears_down_old_plugin_and_loads_updated_code(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    plugin_dir = _write_plugin(
+        tmp_path,
+        "reloadable",
+        """
+        from pydantic import BaseModel
+        from mini_agent.tools.base import Tool
+
+        class NoArgs(BaseModel):
+            pass
+
+        def setup(ctx):
+            ctx.kv_set("version", "one")
+            ctx.register_tool(Tool("reload_tool_v1", "V1", NoArgs, lambda args: {"version": "one"}))
+
+        def teardown(ctx):
+            ctx.kv_set("torn_down", "yes")
+        """,
+    )
+
+    async def scenario():
+        manager = PluginManager(workspace=tmp_path, tools=ToolRegistry())
+        await manager.enable("workspace", "reloadable")
+        (plugin_dir / "plugin.py").write_text(
+            textwrap.dedent(
+                """
+                from pydantic import BaseModel
+                from mini_agent.tools.base import Tool
+
+                class NoArgs(BaseModel):
+                    pass
+
+                def setup(ctx):
+                    ctx.kv_set("version", "two")
+                    ctx.register_tool(Tool("reload_tool_v2", "V2", NoArgs, lambda args: {"version": "two"}))
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        result = await manager.reload("workspace", "reloadable")
+
+        assert result.ok is True
+        assert manager.tools.has_tool("reload_tool_v1") is False
+        assert manager.tools.has_tool("reload_tool_v2") is True
+        assert manager.kv_get("workspace:reloadable", "torn_down") == "yes"
+        assert manager.kv_get("workspace:reloadable", "version") == "two"
+
+    asyncio.run(scenario())
+
+
+def test_locked_plugin_cannot_be_disabled(tmp_path):
+    from mini_agent.plugins.manager import PluginManager
+    from mini_agent.tools.registry import ToolRegistry
+
+    manager = PluginManager(
+        workspace=tmp_path,
+        tools=ToolRegistry(),
+        builtin_plugins={"core": lambda ctx: None},
+        locked_plugins={("builtin", "core")},
+    )
+    manager.load_all()
+
+    async def scenario():
+        result = await manager.disable("builtin", "core")
+
+        assert result.ok is False
+        assert result.plugin.enabled is True
+        assert result.plugin.loaded is True
+        assert "系统插件不可关闭" in result.message
+
+    asyncio.run(scenario())
 
 
 def test_group_message_plugin_archives_and_reads_current_group(tmp_path):
